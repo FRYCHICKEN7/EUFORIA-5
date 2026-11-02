@@ -1,0 +1,115 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userPath(uid) {
+      return /databases/$(database)/documents/usuarios/$(uid);
+    }
+
+    function hasProfile(uid) {
+      return exists(userPath(uid));
+    }
+
+    function profileRole(uid) {
+      return get(userPath(uid)).data.get('rol', '');
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && hasProfile(request.auth.uid)
+        && profileRole(request.auth.uid) in ['admin', 'administrador'];
+    }
+
+    function isEmployee() {
+      return signedIn()
+        && hasProfile(request.auth.uid)
+        && profileRole(request.auth.uid) == 'empleado';
+    }
+
+    match /usuarios/{uid} {
+      allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['email', 'rol', 'createdAt', 'displayName', 'phone'])
+        && request.resource.data.keys().hasAll(['email', 'rol', 'createdAt'])
+        && request.resource.data.rol == 'cliente'
+        && request.resource.data.email == request.auth.token.email
+        && request.resource.data.get('displayName', '') is string
+        && request.resource.data.get('displayName', '').size() <= 100
+        && request.resource.data.get('phone', '') is string
+        && request.resource.data.get('phone', '').size() <= 20
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'phone', 'photoURL'])
+        && request.resource.data.rol == resource.data.rol
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+
+    match /clientes/{clienteId} {
+      allow get: if (signedIn() && request.auth.uid == clienteId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == clienteId
+        && hasProfile(request.auth.uid)
+        && profileRole(request.auth.uid) == 'cliente'
+        && request.resource.data.get('uid', request.auth.uid) == request.auth.uid;
+      allow update: if signedIn()
+        && request.auth.uid == clienteId
+        && hasProfile(request.auth.uid)
+        && profileRole(request.auth.uid) == 'cliente'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombre', 'telefono', 'photoURL', 'updatedAt']);
+      allow delete: if isAdmin();
+    }
+
+    match /negocios/{negocioId} {
+      allow get, list: if signedIn();
+      allow create, update, delete: if isAdmin();
+
+      match /servicios/{servicioId} {
+        allow get, list: if signedIn();
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /empleados/{empleadoId} {
+        allow get, list: if isAdmin()
+          || (signedIn() && resource.data.get('publica', false) == true)
+          || (isEmployee() && (resource.data.get('usuarioId', '') == request.auth.uid
+            || resource.data.get('uid', '') == request.auth.uid
+            || empleadoId == request.auth.uid));
+        allow create, update, delete: if isAdmin();
+      }
+
+      match /horarios/{horarioId} {
+        allow get, list: if signedIn();
+        allow create, update, delete: if isAdmin();
+      }
+    }
+
+    match /citas/{citaId} {
+      allow get, list: if signedIn()
+        && (isAdmin()
+          || resource.data.get('clienteId', '') == request.auth.uid
+          || (isEmployee() && (resource.data.get('empleadoUid', '') == request.auth.uid
+            || resource.data.get('empleadoId', '') == request.auth.uid)));
+      // Reservas, aprobaciones, cancelaciones y cambios de estado pasan por Cloud Functions.
+      allow create, update, delete: if false;
+    }
+
+    match /notificaciones/{notifId} {
+      allow get, list: if signedIn()
+        && (resource.data.get('destinatarioId', '') == request.auth.uid || isAdmin());
+      allow update: if signedIn()
+        && resource.data.get('destinatarioId', '') == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida'])
+        && request.resource.data.leida is bool;
+      allow create, delete: if false;
+    }
+  }
+}

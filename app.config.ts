@@ -32,7 +32,7 @@ const env = {
   appSlug: "euforia",
   // S3 URL of the app logo - set this to the URL returned by generate_image when creating custom logo
   // Leave empty to use the default icon from assets/images/icon.png
-  logoUrl: "",
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664057458872/JuXtEODzBUqJVvkM.png",
   scheme: schemeFromBundleId,
   iosBundleId: bundleId,
   androidPackage: bundleId,
@@ -59,7 +59,8 @@ const publicRuntime = {
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
 };
 
-const config: ExpoConfig = {
+const config: ExpoConfig & { logoUrl: string } = {
+  logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664057458872/JuXtEODzBUqJVvkM.png",
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
