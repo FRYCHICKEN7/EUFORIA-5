@@ -3,6 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Redirect } from "expo-router";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
+import { hasProfileRole } from "@/lib/roles";
 
 type AllowedRole = "cliente" | "empleado" | "administrador" | "admin";
 
@@ -12,8 +13,7 @@ export function AuthGate({ allowedRoles, children }: PropsWithChildren<{ allowed
     return <View style={styles.loading}><ActivityIndicator color={BRAND.primary} /><Text style={styles.text}>Verificando acceso…</Text></View>;
   }
   if (!user || !profile) return <Redirect href="/auth" />;
-  const role = String(profile.rol ?? "").toLowerCase() as AllowedRole;
-  if (!allowedRoles.includes(role)) return <Redirect href="/" />;
+  if (!hasProfileRole(profile, allowedRoles)) return <Redirect href="/" />;
   return <>{children}</>;
 }
 

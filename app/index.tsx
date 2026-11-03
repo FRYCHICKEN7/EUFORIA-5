@@ -2,6 +2,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Redirect } from "expo-router";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
+import { profileRole } from "@/lib/roles";
 
 export default function EntryScreen() {
   const { user, profile, loading } = useAuthSession();
@@ -10,8 +11,8 @@ export default function EntryScreen() {
   }
   if (!user) return <Redirect href="/auth" />;
   if (!profile) return <Redirect href="/auth" />;
-  const role = String(profile.rol ?? "").toLowerCase();
-  if (role === "admin" || role === "administrador") return <Redirect href="/(tabs)" />;
+  const role = profileRole(profile);
+  if (role === "admin") return <Redirect href="/(tabs)" />;
   if (role === "empleado") return <Redirect href="/employee/schedule" />;
   if (role === "cliente") return <Redirect href="/client/catalog" />;
   return <Redirect href="/auth" />;

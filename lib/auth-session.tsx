@@ -5,7 +5,8 @@ import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
 
 export type UserProfile = {
   email?: string;
-  rol: "cliente" | "empleado" | "administrador" | "admin" | string;
+  rol?: "cliente" | "empleado" | "administrador" | "admin" | string;
+  role?: "cliente" | "empleado" | "administrador" | "admin" | string;
   negocioId?: string;
   [key: string]: unknown;
 };

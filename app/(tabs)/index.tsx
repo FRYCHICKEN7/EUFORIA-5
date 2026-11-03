@@ -9,11 +9,12 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, subscribeAdminAppointments, type AppointmentRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
+import { hasProfileRole } from "@/lib/roles";
 
 function SummaryContent() {
   const { user, profile } = useAuthSession();
   const uid = user?.uid;
-  const isAdmin = profile?.rol === "admin" || profile?.rol === "administrador";
+  const isAdmin = hasProfileRole(profile, ["admin"]);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

@@ -9,13 +9,14 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { db } from "@/lib/firebase";
 import { appointmentMillis } from "@/lib/appointments";
+import { hasProfileRole } from "@/lib/roles";
 
 type ClientProfile = { id: string; email?: string; displayName?: string; nombre?: string; phone?: string; telefono?: string; createdAt?: unknown };
 
 function ClientsContent() {
   const { user, profile } = useAuthSession();
   const uid = user?.uid;
-  const isAdmin = profile?.rol === "admin" || profile?.rol === "administrador";
+  const isAdmin = hasProfileRole(profile, ["admin"]);
   const [clients, setClients] = useState<ClientProfile[]>([]);
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);

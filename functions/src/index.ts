@@ -21,11 +21,19 @@ function requiredString(value: unknown, label: string, maxLength = 160): string 
 }
 
 function roleFrom(profile: DocumentData): string {
-  return typeof profile.rol === "string" ? profile.rol.trim().toLowerCase() : "";
+  const normalize = (value: unknown) => {
+    if (typeof value !== "string") return "";
+    const role = value.trim().toLowerCase();
+    return role === "admin" || role === "administrador" ? "admin" : role;
+  };
+  const primary = normalize(profile.rol);
+  const legacy = normalize(profile.role);
+  if (primary && legacy && primary !== legacy) return "";
+  return primary || legacy;
 }
 
 function canManage(role: string, uid: string, appointment: DocumentData): boolean {
-  if (role === "admin" || role === "administrador") return true;
+  if (role === "admin") return true;
   return role === "empleado" && (appointment.empleadoUid === uid || appointment.empleadoId === uid);
 }
 
@@ -265,7 +273,7 @@ export const registrarAviso = onCall<{ destinatarioId: string; titulo: string; c
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
   const profileSnapshot = await db.collection("usuarios").doc(uid).get();
-  if (!profileSnapshot.exists || !["admin", "administrador"].includes(roleFrom(profileSnapshot.data() ?? {}))) {
+  if (!profileSnapshot.exists || roleFrom(profileSnapshot.data() ?? {}) !== "admin") {
     throw new HttpsError("permission-denied", "Solo el administrador puede emitir avisos.");
   }
   const destinatarioId = requiredString(request.data?.destinatarioId, "Destinatario", 128);

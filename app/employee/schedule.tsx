@@ -7,12 +7,13 @@ import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, decideAppointment, subscribeAdminAppointments, subscribeEmployeeAppointments, type AppointmentRecord } from "@/lib/appointments";
+import { profileRole } from "@/lib/roles";
 
 function ScheduleContent() {
   const { user, profile } = useAuthSession();
   const uid = user?.uid;
-  const role = String(profile?.rol ?? "").toLowerCase();
-  const isAdmin = role === "admin" || role === "administrador";
+  const role = profileRole(profile) ?? "";
+  const isAdmin = role === "admin";
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");

@@ -8,6 +8,7 @@ import { ArrowLeft, ArrowRight, Eye, EyeOff, LockKeyhole, Mail, Phone, UserRound
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
 import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
+import { profileRole } from "@/lib/roles";
 
 type AuthMode = "login" | "register" | "recovery";
 type AuthRole = "administrador" | "empleado" | "cliente";
@@ -35,10 +36,10 @@ export default function AuthScreen() {
   const [message, setMessage] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const activeRole = String(activeProfile?.rol ?? "").trim().toLowerCase();
+  const activeRole = profileRole(activeProfile);
   useEffect(() => {
     if (sessionLoading || !activeUser?.uid || !activeRole) return;
-    if (activeRole === "admin" || activeRole === "administrador") router.replace("/(tabs)");
+    if (activeRole === "admin") router.replace("/(tabs)");
     else if (activeRole === "empleado") router.replace("/employee/schedule");
     else if (activeRole === "cliente") router.replace("/client/catalog");
   }, [sessionLoading, activeUser?.uid, activeRole]);
@@ -109,21 +110,21 @@ export default function AuthScreen() {
       }
       if (!profileSnapshot.exists()) {
         await signOut(auth);
-        setMessage("La cuenta no tiene perfil en usuarios/{uid}. El administrador debe asignar su rol desde Firebase Console.");
+        setMessage(`No existe usuarios/${credential.user.uid}. Crea el perfil con el UID exacto de Authentication; se aceptan los campos role o rol.`);
         return;
       }
 
-      const storedRole = String(profileSnapshot.data().rol ?? "").trim().toLowerCase();
-      const isAdmin = storedRole === "admin" || storedRole === "administrador";
+      const storedRole = profileRole(profileSnapshot.data());
+      const isAdmin = storedRole === "admin";
       const isEmployee = storedRole === "empleado";
       const isClient = storedRole === "cliente";
       const roleMatches = role === "administrador" ? isAdmin : role === "empleado" ? isEmployee : isClient;
       if (!roleMatches) {
         await signOut(auth);
         setMessage(role === "administrador"
-          ? "Esta cuenta no tiene rol de administrador. Verifica usuarios/{uid}.rol en Firestore."
+          ? "Esta cuenta no tiene rol de administrador. En usuarios/{UID de Authentication}, usa role: admin o rol: administrador."
           : role === "empleado"
-            ? "Esta cuenta no tiene rol empleado. Solicita al administrador que verifique usuarios/{uid}.rol."
+            ? "Esta cuenta no tiene rol empleado. Solicita que verifiquen el perfil usuarios/{UID de Authentication}."
             : "Esta cuenta tiene un rol distinto. Selecciona el tipo de acceso correspondiente.");
         return;
       }

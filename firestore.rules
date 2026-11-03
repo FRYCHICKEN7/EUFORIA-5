@@ -13,14 +13,28 @@ service cloud.firestore {
       return exists(userPath(uid));
     }
 
+    function normalizedRole(value) {
+      return value is string
+        ? (value.lower() in ['admin', 'administrador'] ? 'admin' : value.lower())
+        : '';
+    }
+
+    function profileRoleFromData(data) {
+      let primary = normalizedRole(data.get('rol', ''));
+      let legacy = normalizedRole(data.get('role', ''));
+      return primary != '' && legacy != '' && primary != legacy
+        ? '__conflicting_roles__'
+        : (primary != '' ? primary : legacy);
+    }
+
     function profileRole(uid) {
-      return get(userPath(uid)).data.get('rol', '');
+      return profileRoleFromData(get(userPath(uid)).data);
     }
 
     function isAdmin() {
       return signedIn()
         && hasProfile(request.auth.uid)
-        && profileRole(request.auth.uid) in ['admin', 'administrador'];
+        && profileRole(request.auth.uid) == 'admin';
     }
 
     function isEmployee() {

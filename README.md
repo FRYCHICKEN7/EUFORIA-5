@@ -10,27 +10,29 @@ La integración de correo/contraseña, registro cliente, perfil automático, rec
 
 ## Inicio de sesión y perfiles
 
-Firebase Authentication debe tener habilitado el proveedor **Correo electrónico/contraseña** (ya estaba habilitado según la configuración entregada). El login ofrece Cliente, Empleado y Administrador; cada opción se valida contra el rol existente en `usuarios/{uid}`. El registro público siempre crea una cuenta cliente y guarda un perfil `usuarios/{uid}` con el mismo UID de Authentication, correo, `rol: "cliente"`, nombre, teléfono opcional y `createdAt` de servidor. El administrador ve esos perfiles nuevos en la pestaña **Clientes** mediante una suscripción en vivo.
+Firebase Authentication debe tener habilitado el proveedor **Correo electrónico/contraseña**. El login ofrece Cliente, Empleado y Administrador; cada opción se valida contra `usuarios/{UID exacto de Authentication}` y admite `rol` o el campo legado `role`. Los valores admin admitidos son `admin` y `administrador`; si ambos campos están presentes pero se contradicen, la app deniega el acceso. El registro público siempre crea una cuenta cliente y guarda un perfil `usuarios/{uid}` con el mismo UID de Authentication, correo, `rol: "cliente"`, nombre, teléfono opcional y `createdAt` de servidor. El administrador ve esos perfiles nuevos en la pestaña **Clientes** mediante una suscripción en vivo.
 
 El cliente puede pedir un correo de recuperación y cambiar su propia contraseña desde Ajustes → Seguridad. No se guarda ninguna contraseña en Firestore ni en archivos de configuración.
 
 ### Preparar el perfil administrador inicial
 
-La cuenta de Authentication existente es `euforiasalonhn@gmail.com`, UID `r4CMfA2NlNWs7CkcJL6G9nKl6va2`. En Firebase Console, después de confirmar que el usuario está presente en Authentication, crea o corrige manualmente —desde un entorno confiable— el documento:
+En Firebase Console, abre **Authentication → Users**, busca `euforiasalonhn@gmail.com` y copia su UID actual. En Firestore, crea o corrige manualmente —desde un entorno confiable— el documento cuyo ID coincide exactamente con ese UID:
 
-`usuarios/r4CMfA2NlNWs7CkcJL6G9nKl6va2`
+`usuarios/{UID copiado de Authentication}`
 
 con los campos:
 
 ```json
 {
   "email": "euforiasalonhn@gmail.com",
-  "rol": "administrador",
+  "role": "admin",
   "createdAt": "Timestamp"
 }
 ```
 
-En Firestore Console, `createdAt` debe ser un valor **Timestamp**, no el texto literal `"Timestamp"`. El acceso administrativo no se puede asignar desde el registro público; las reglas impiden que una persona cambie su rol desde la app. También se acepta `rol: "admin"`.
+En Firestore Console, `createdAt` debe ser un valor **Timestamp**, no el texto literal `"Timestamp"`. También se aceptan `rol: "admin"` y `rol: "administrador"`. Aunque la app reconoce tanto `role` como `rol`, no busca perfiles por correo ni usa un documento cuyo ID no sea el UID autenticado. El acceso administrativo no se puede asignar desde el registro público; las reglas impiden que una persona cambie su rol desde la app.
+
+Si aparece “No existe `usuarios/{UID}`”, compara el UID que la app presenta en el mensaje con el de **Authentication → Users**. Corrige el ID del documento para que coincida exactamente; un campo `id` dentro del documento no sustituye el ID del documento de Firestore.
 
 Para crear personal, primero crea sus cuentas de Authentication por un procedimiento autorizado, y luego asigna en `usuarios/{uid}` `rol: "empleado"`. No hagas el cambio desde el cliente.
 
