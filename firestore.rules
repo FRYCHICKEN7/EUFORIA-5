@@ -9,38 +9,78 @@ service cloud.firestore {
       return /databases/$(database)/documents/usuarios/$(uid);
     }
 
-    function hasProfile(uid) {
-      return exists(userPath(uid));
+    function legacyUserPath(uid) {
+      return /databases/$(database)/documents/users/$(uid);
+    }
+
+    function employeeProfilePath(uid) {
+      return /databases/$(database)/documents/empleados/$(uid);
     }
 
     function normalizedRole(value) {
       return value is string
-        ? (value.lower() in ['admin', 'administrador'] ? 'admin' : value.lower())
+        ? (value.lower() in ['admin', 'administrador'] ? 'admin'
+          : value.lower() in ['empleado', 'employee'] ? 'empleado'
+          : value.lower() in ['cliente', 'customer', 'client'] ? 'cliente'
+          : '')
         : '';
     }
 
     function profileRoleFromData(data) {
-      let primary = normalizedRole(data.get('rol', ''));
-      let legacy = normalizedRole(data.get('role', ''));
-      return primary != '' && legacy != '' && primary != legacy
+      let rawPrimary = data.get('rol', '');
+      let rawLegacy = data.get('role', '');
+      let primary = normalizedRole(rawPrimary);
+      let legacy = normalizedRole(rawLegacy);
+      let invalidValue = (rawPrimary is string && rawPrimary != '' && primary == '')
+        || (rawLegacy is string && rawLegacy != '' && legacy == '');
+      return invalidValue || (primary != '' && legacy != '' && primary != legacy)
         ? '__conflicting_roles__'
         : (primary != '' ? primary : legacy);
     }
 
     function profileRole(uid) {
-      return profileRoleFromData(get(userPath(uid)).data);
+      let appRole = exists(userPath(uid)) ? profileRoleFromData(get(userPath(uid)).data) : '';
+      let legacyRole = exists(legacyUserPath(uid)) ? profileRoleFromData(get(legacyUserPath(uid)).data) : '';
+      let staffRole = exists(employeeProfilePath(uid)) ? profileRoleFromData(get(employeeProfilePath(uid)).data) : '';
+      let conflict = appRole == '__conflicting_roles__'
+        || legacyRole == '__conflicting_roles__'
+        || staffRole == '__conflicting_roles__'
+        || (appRole != '' && legacyRole != '' && appRole != legacyRole)
+        || (appRole != '' && staffRole != '' && appRole != staffRole)
+        || (legacyRole != '' && staffRole != '' && legacyRole != staffRole);
+      return conflict ? '__conflicting_roles__'
+        : (appRole != '' ? appRole : legacyRole != '' ? legacyRole : staffRole);
     }
 
     function isAdmin() {
-      return signedIn()
-        && hasProfile(request.auth.uid)
-        && profileRole(request.auth.uid) == 'admin';
+      return signedIn() && profileRole(request.auth.uid) == 'admin';
     }
 
     function isEmployee() {
-      return signedIn()
-        && hasProfile(request.auth.uid)
-        && profileRole(request.auth.uid) == 'empleado';
+      return signedIn() && profileRole(request.auth.uid) == 'empleado';
+    }
+
+    function publicEmployee(data) {
+      return data.get('activo', false) == true
+        && data.get('publica', false) == true
+        && data.get('disponible', false) == true;
+    }
+
+    function validCustomerProfile(data, uid) {
+      return data.keys().hasOnly([
+          'id', 'email', 'role', 'rol', 'createdAt', 'name', 'displayName',
+          'identityNumber', 'phone', 'profileImage', 'photoURL'
+        ])
+        && data.keys().hasAll(['id', 'email', 'createdAt'])
+        && data.get('id', '') == uid
+        && data.get('email', '') == request.auth.token.email
+        && profileRoleFromData(data) == 'cliente'
+        && data.get('name', '') is string && data.get('name', '').size() <= 100
+        && data.get('displayName', '') is string && data.get('displayName', '').size() <= 100
+        && data.get('identityNumber', '') is string && data.get('identityNumber', '').size() <= 40
+        && data.get('phone', '') is string && data.get('phone', '').size() <= 20
+        && data.get('profileImage', '') is string && data.get('profileImage', '').size() <= 2048
+        && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048;
     }
 
     match /usuarios/{uid} {
@@ -48,22 +88,44 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if signedIn()
         && request.auth.uid == uid
-        && request.resource.data.keys().hasOnly(['email', 'rol', 'createdAt', 'displayName', 'phone'])
-        && request.resource.data.keys().hasAll(['email', 'rol', 'createdAt'])
-        && request.resource.data.rol == 'cliente'
-        && request.resource.data.email == request.auth.token.email
-        && request.resource.data.get('displayName', '') is string
-        && request.resource.data.get('displayName', '').size() <= 100
-        && request.resource.data.get('phone', '') is string
-        && request.resource.data.get('phone', '').size() <= 20
+        && validCustomerProfile(request.resource.data, uid)
         && request.resource.data.createdAt == request.time;
       allow update: if signedIn()
         && request.auth.uid == uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'phone', 'photoURL'])
-        && request.resource.data.rol == resource.data.rol
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'displayName', 'identityNumber', 'phone', 'profileImage', 'photoURL'
+        ])
+        && request.resource.data.id == resource.data.id
         && request.resource.data.email == resource.data.email
+        && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
         && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if false;
+    }
+
+    match /users/{uid} {
+      allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && validCustomerProfile(request.resource.data, uid)
+        && request.resource.data.createdAt == request.time;
+      allow update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'displayName', 'identityNumber', 'phone', 'profileImage', 'photoURL'
+        ])
+        && request.resource.data.id == resource.data.id
+        && request.resource.data.email == resource.data.email
+        && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt;
+      allow delete: if false;
+    }
+
+    match /empleados/{uid} {
+      allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow list: if isAdmin();
+      // Profile promotion and protected employee fields are written only by Admin SDK Functions.
+      allow create, update, delete: if false;
     }
 
     match /clientes/{clienteId} {
@@ -71,12 +133,10 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if signedIn()
         && request.auth.uid == clienteId
-        && hasProfile(request.auth.uid)
         && profileRole(request.auth.uid) == 'cliente'
         && request.resource.data.get('uid', request.auth.uid) == request.auth.uid;
       allow update: if signedIn()
         && request.auth.uid == clienteId
-        && hasProfile(request.auth.uid)
         && profileRole(request.auth.uid) == 'cliente'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['nombre', 'telefono', 'photoURL', 'updatedAt']);
       allow delete: if isAdmin();
@@ -93,11 +153,20 @@ service cloud.firestore {
 
       match /empleados/{empleadoId} {
         allow get, list: if isAdmin()
-          || (signedIn() && resource.data.get('publica', false) == true)
-          || (isEmployee() && (resource.data.get('usuarioId', '') == request.auth.uid
-            || resource.data.get('uid', '') == request.auth.uid
-            || empleadoId == request.auth.uid));
-        allow create, update, delete: if isAdmin();
+          || (signedIn() && request.auth.uid == empleadoId)
+          || (signedIn() && publicEmployee(resource.data));
+        // Employee membership, roles and published visibility are server-managed.
+        allow create, update, delete: if false;
+
+        match /disponibilidad/{dia} {
+          allow get, list: if isAdmin()
+            || (isEmployee() && request.auth.uid == empleadoId)
+            || (signedIn()
+              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('publica', false) == true
+              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('activo', false) == true
+              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('disponible', false) == true);
+          allow create, update, delete: if false;
+        }
       }
 
       match /horarios/{horarioId} {
@@ -112,7 +181,7 @@ service cloud.firestore {
           || resource.data.get('clienteId', '') == request.auth.uid
           || (isEmployee() && (resource.data.get('empleadoUid', '') == request.auth.uid
             || resource.data.get('empleadoId', '') == request.auth.uid)));
-      // Reservas, aprobaciones, cancelaciones y cambios de estado pasan por Cloud Functions.
+      // Reservations and all state transitions are performed by verified Cloud Functions.
       allow create, update, delete: if false;
     }
 

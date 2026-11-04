@@ -1,15 +1,10 @@
 import { createContext, useContext, useEffect, useMemo, useState, type PropsWithChildren } from "react";
 import { onAuthStateChanged, type User } from "firebase/auth";
-import { doc, onSnapshot } from "firebase/firestore";
 import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
+import { subscribeUserProfile } from "@/lib/profiles";
+import type { ProfileRecord } from "@/lib/roles";
 
-export type UserProfile = {
-  email?: string;
-  rol?: "cliente" | "empleado" | "administrador" | "admin" | string;
-  role?: "cliente" | "empleado" | "administrador" | "admin" | string;
-  negocioId?: string;
-  [key: string]: unknown;
-};
+export type UserProfile = ProfileRecord & { email?: string; negocioId?: string };
 
 type AuthSession = {
   user: User | null;
@@ -45,18 +40,12 @@ export function AuthSessionProvider({ children }: PropsWithChildren) {
           return;
         }
         setLoading(true);
-        stopProfile = onSnapshot(
-          doc(db!, "usuarios", nextUser.uid),
-          (snapshot) => {
-            setProfile(snapshot.exists() ? (snapshot.data() as UserProfile) : null);
-            setLoading(false);
-          },
-          (error) => {
-            console.warn("No se pudo leer el perfil autenticado.", error.code);
-            setProfile(null);
-            setLoading(false);
-          },
-        );
+        stopProfile = subscribeUserProfile(nextUser.uid, (nextProfile) => {
+          setProfile(nextProfile as UserProfile | null);
+          setLoading(false);
+        }, (error) => {
+          console.warn("No se pudo leer una de las fuentes de perfil autenticado.", (error as Error & { code?: string }).code);
+        });
       });
     });
 

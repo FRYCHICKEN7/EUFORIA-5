@@ -1,50 +1,41 @@
 # EUFORIA Beauty Studio
 
-App móvil Expo Router/React Native/TypeScript para clientes y el equipo de EUFORIA Beauty Studio, Honduras. Usa Firebase Authentication y Firestore directamente desde el cliente; las reservas y decisiones privilegiadas se procesan en Cloud Functions.
+Aplicación móvil Expo Router / React Native / TypeScript para clientes, empleados y administración del salón en Honduras. Firebase Authentication valida correo y contraseña; Firestore conserva perfiles y datos de negocio, y Cloud Functions protegen reservas, cambios de roles y cronometraje.
 
-## Estado de la entrega
+## Estado y límites de esta entrega
 
-La integración de correo/contraseña, registro cliente, perfil automático, recuperación de acceso, cambio de contraseña, lectura en vivo de perfiles de clientes, catálogo real, solicitud transaccional de citas y agenda en tiempo real están implementadas en el código. Las variables públicas de Firebase ya están configuradas y disponibles en el entorno gestionado que se validó; no las envíes por chat.
+El código implementa login y registro de clientes, perfiles Firebase compatibles con la colección antigua `users` y la colección de app `usuarios`, lista administrativa de clientes, activación de empleados a partir de cuentas existentes, catálogo de servicios con duración, turnos semanales de empleado, cálculo seguro de franjas libres, reservas con control de conflictos, confirmación/rechazo, inicio/final del trabajo y métricas de tiempo real.
 
-**Aún no se han desplegado** las reglas, índices ni Cloud Functions al Firebase real. Esta tarea tampoco verificó ni modificó el perfil de administrador en Firestore, ni pobló servicios, profesionales u horarios reales. Por eso no habilites reservas de producción hasta completar “Preparación Firebase” y desplegar los artefactos. No se crearon datos de muestra ni se probó autenticación o reservas escribiendo en la base compartida.
+**No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales/variables Firebase se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
-## Inicio de sesión y perfiles
+Los avisos de nuevas solicitudes se guardan en Firestore y aparecen en la agenda de EUFORIA en tiempo real cuando la app escucha la cuenta. No son notificaciones push de Android/iOS: FCM y credenciales nativas no están integrados en esta fase.
 
-Firebase Authentication debe tener habilitado el proveedor **Correo electrónico/contraseña**. El login ofrece Cliente, Empleado y Administrador; cada opción se valida contra `usuarios/{UID exacto de Authentication}` y admite `rol` o el campo legado `role`. Los valores admin admitidos son `admin` y `administrador`; si ambos campos están presentes pero se contradicen, la app deniega el acceso. El registro público siempre crea una cuenta cliente y guarda un perfil `usuarios/{uid}` con el mismo UID de Authentication, correo, `rol: "cliente"`, nombre, teléfono opcional y `createdAt` de servidor. El administrador ve esos perfiles nuevos en la pestaña **Clientes** mediante una suscripción en vivo.
+## Roles y perfiles
 
-El cliente puede pedir un correo de recuperación y cambiar su propia contraseña desde Ajustes → Seguridad. No se guarda ninguna contraseña en Firestore ni en archivos de configuración.
+Authentication Email/Password debe estar habilitado. Al registrarse, cada persona —incluido quien posteriormente será empleado— se crea primero como cliente. La app guarda el UID de Authentication como ID del documento y el campo `id`, correo, nombre, teléfono e identidad opcionales, `profileImage` vacío si no hay foto, `role: "cliente"`, `rol: "cliente"` y fecha del servidor. El registro público nunca asigna el rol `empleado` o `admin`.
 
-### Preparar el perfil administrador inicial
+Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles antiguos con `role: "customer"` o `role: "client"` se interpretan como cliente; `role`/`rol` deben coincidir si ambos aparecen. Cuando existen fuentes con roles contradictorios, el acceso se deniega hasta reconciliarlas. El panel **Clientes** une por UID los perfiles reales `users/{uid}` y `usuarios/{uid}`, muestra `email`, `id`, `identityNumber`, `name`, `phone`, `profileImage`, rol y fecha cuando existen, y no inventa valores.
 
-En Firebase Console, abre **Authentication → Users**, busca `euforiasalonhn@gmail.com` y copia su UID actual. En Firestore, crea o corrige manualmente —desde un entorno confiable— el documento cuyo ID coincide exactamente con ese UID:
+### Preparar una cuenta administradora
 
-`usuarios/{UID copiado de Authentication}`
+1. En Firebase Console abre **Authentication → Users**, localiza la cuenta administradora y copia su UID actual.
+2. En Firestore crea/actualiza `users/{UID}` o `usuarios/{UID}` usando **exactamente ese UID como ID del documento**; no basta con un campo `id` dentro de otro documento.
+3. Asigna `email` igual al correo de Authentication y `role: "admin"` o `rol: "admin"` (también se admite `administrador`). Si mantienes documentos en ambas colecciones, usa el mismo rol en ambos. Un perfil con UID, correo o roles distintos no se vincula por email de manera automática.
+4. Inicia sesión seleccionando **Administrador**. Para más detalles, el UID mostrado por la app debe coincidir carácter por carácter con el UID de Authentication.
 
-con los campos:
+La cuenta administradora inicial que se había documentado es `euforiasalonhn@gmail.com`; verifica siempre el UID actual en Authentication, ya que no es fijo.
 
-```json
-{
-  "email": "euforiasalonhn@gmail.com",
-  "role": "admin",
-  "createdAt": "Timestamp"
-}
-```
+### Alta segura de empleado
 
-En Firestore Console, `createdAt` debe ser un valor **Timestamp**, no el texto literal `"Timestamp"`. También se aceptan `rol: "admin"` y `rol: "administrador"`. Aunque la app reconoce tanto `role` como `rol`, no busca perfiles por correo ni usa un documento cuyo ID no sea el UID autenticado. El acceso administrativo no se puede asignar desde el registro público; las reglas impiden que una persona cambie su rol desde la app.
+1. La persona se registra desde **Regístrate** usando su correo y contraseña; su rol inicial queda como cliente.
+2. Administración abre **Clientes y equipo**, verifica que es la cuenta correcta y selecciona un negocio activo y un código único para el campo `Empleado`.
+3. **Crear perfil de empleado** invoca la Cloud Function `crearPerfilEmpleado`. La Function vuelve a comprobar el rol admin, verifica que el UID exista y tenga correo habilitado en Firebase Authentication, comprueba el perfil cliente y el negocio, y luego sincroniza `users/{uid}` y `usuarios/{uid}` con el rol empleado.
+4. La Function crea `empleados/{uid}` y `negocios/{negocioId}/empleados/{uid}` con `Empleado`, `email`, `id` igual al UID, `name`, `profileImage`, `role/rol: "empleado"`, `activo: true`, `publica: true` y `disponible: false`. No se agrega una cuenta Auth inventada ni se guarda una contraseña desde administración.
+5. El empleado entra por la opción **Empleado**, abre **Mi agenda → Editar mi disponibilidad semanal**, habilita cada día, guarda inicio/fin y marca **Disponible para citas**. Los valores iniciales 08:00–17:00 son solo una sugerencia del formulario y no se escriben hasta guardar.
 
-Si aparece “No existe `usuarios/{UID}`”, compara el UID que la app presenta en el mensaje con el de **Authentication → Users**. Corrige el ID del documento para que coincida exactamente; un campo `id` dentro del documento no sustituye el ID del documento de Firestore.
+## Firestore: datos del negocio
 
-Para crear personal, primero crea sus cuentas de Authentication por un procedimiento autorizado, y luego asigna en `usuarios/{uid}` `rol: "empleado"`. No hagas el cambio desde el cliente.
-
-## Configuración de Firebase
-
-Los secretos ya configurados en el entorno WebDev son `EXPO_PUBLIC_FIREBASE_API_KEY`, `EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN`, `EXPO_PUBLIC_FIREBASE_PROJECT_ID`, `EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET`, `EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID` y `EXPO_PUBLIC_FIREBASE_APP_ID`; `EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID` es opcional. El proyecto configurado es `euforia-e76a6`. Estos valores son configuración pública de cliente, no una service account ni contraseñas. No publiques claves privadas, JSON de Admin SDK, tokens o contraseñas.
-
-Para desarrollo local, crea un `.env.local` a partir de `.env.example` y completa los valores desde Firebase Console; ese archivo está ignorado por Git. En el entorno WebDev no hace falta crear un archivo `.env`: se leen los secretos del proyecto. La tarjeta Ajustes → Conexión Firebase informa cuando el SDK pudo inicializarse. La presencia de configuración no equivale a una prueba de login contra el Firebase real.
-
-## Datos de negocio necesarios
-
-No se precargan servicios, precios, empleados ni horas ficticias. Antes de aceptar reservas, configura documentos reales:
+No hay precios, servicios, empleados ni horarios de muestra. Antes de aceptar citas, configura datos reales:
 
 ```text
 negocios/{negocioId}
@@ -61,30 +52,41 @@ negocios/{negocioId}/servicios/{servicioId}
 
 negocios/{negocioId}/horarios/{dia}
   activo: true
-  apertura: "09:00"
-  cierre: "18:00"
+  apertura: "08:00"
+  cierre: "17:00"
   recesos: [{ inicio: "12:00", fin: "13:00" }] (opcional)
-```
 
-`dia` es un ID de texto numérico: `0` domingo, `1` lunes, …, `6` sábado. Crea para cada día un documento `activo: false` cuando el negocio cierre. El backend interpreta horas en `America/Tegucigalpa`; rechazará citas fuera del horario, durante recesos, en días no habilitados, en el pasado, con servicio inválido o si se cruzan con una cita activa. El catálogo muestra servicios sin inventar datos; un servicio sin duración o precio numéricos no permite solicitar.
-
-En modo `multiEmpleado`, añade:
-
-```text
-negocios/{negocioId}/empleados/{empleadoId}
+negocios/{negocioId}/empleados/{uid}
+  usuarioId: UID de Authentication
+  Empleado: código de empleado
   nombre: string
-  usuarioId: "UID de Firebase Authentication" (requerido para agenda de esa persona)
-  publica: true
   activo: true
+  publica: true
+  disponible: true | false
+
+negocios/{negocioId}/empleados/{uid}/disponibilidad/{dia}
+  dia: 0..6
+  activo: true | false
+  inicio: "08:00"
+  fin: "17:00"
 ```
 
-Solo personal publicado y activo aparece en el selector de reservas. La cita se asigna a la profesional elegida; su UID queda en `empleadoUid` para autorización y consulta en vivo. El modo `unipersonal` confirma directamente al reservar; en modo multiempleado la reserva entra como `hold` por 30 minutos, visible en la agenda, y el administrador o empleado asignado puede aprobarla o rechazarla. La función programada expira los `hold` vencidos cada 5 minutos. Cada decisión verifica rol, asignación y estado actual en el backend.
+`dia` es un ID numérico en texto: `0` domingo, `1` lunes, …, `6` sábado. Los horarios del negocio y del empleado son controles diferentes; una franja solo está disponible dentro de ambos. La jornada predeterminada del formulario de empleado es 08:00 a 17:00, como corregiste. El horario del negocio se configura por separado y debe reflejar sus horas reales.
 
-## Reglas, índices y Cloud Functions
+El catálogo se mantiene desde **Resumen → Servicios y tiempos estimados**. Ejemplo: “Corte de Cabello Hombre”, precio L. 120 y `duracionMin: 90`; la app presenta 1 h 30 min. Solo se ofrecen empleados activos, publicados y con la casilla de disponibilidad activa.
 
-`firestore.rules` deniega escrituras directas a citas. El cliente solo puede crear su propio perfil con `rol: "cliente"` y leer sus propias citas; el empleado ve solo citas asignadas; el administrador, reconocido por `usuarios/{uid}.rol`, puede leer la agenda y perfiles. El catálogo de servicios es legible por usuarios autenticados y los empleados solo se exponen a clientes cuando `publica: true`. `firestore.indexes.json` incluye las combinaciones usadas por reservas y listeners.
+## Reserva, agenda y medición
 
-Para desplegar **manualmente** (la tarea no ha desplegado ni modificado el Firebase de producción), usa una cuenta con permisos de Firebase, verifica dos veces el ID del proyecto y ejecuta desde la raíz:
+1. El cliente selecciona servicio, fecha, empleado y una hora devuelta por `obtenerDisponibilidad` (callable). El servidor calcula horas en `America/Tegucigalpa`, en incrementos de 15 minutos. No incluye horas pasadas, recesos, ni un servicio que no quepa completo dentro del turno.
+2. El cálculo excluye solapamientos del mismo empleado con citas `hold` vigentes, `pendiente_de_aprobacion`, `confirmada` o `en_curso`. Si alguien ocupa el horario después de cargar la lista, `reservarCita` vuelve a comprobarlo dentro de una transacción; ante conflicto rechaza y la app vuelve a cargar las franjas libres.
+3. Una nueva solicitud queda como `hold` temporal por 30 minutos y genera un aviso Firestore `nueva_solicitud_cita`. El empleado asignado la recibe en la agenda en vivo y puede confirmar o rechazar. Al confirmar, el estado pasa a `confirmada` y el cliente ve la cita en su propio listener en vivo. `expirarHolds` retira reservas temporales vencidas cada cinco minutos.
+4. El empleado asignado pulsa **Inicio de servicio**: Functions registra `startedAt` con la hora del servidor y cambia a `en_curso`. Al pulsar **Servicio finalizado**, registra `completedAt`, cambia a `completada` y calcula `duracionRealMin`. El panel administrativo muestra promedio real y cantidad de trabajos completados por empleado/servicio.
+
+La escritura directa de citas, promociones de rol, disponibilidad y transiciones sensibles está bloqueada en Rules; se hace por Cloud Functions autorizadas. Las consultas de agenda respetan propietario/empleado/admin. `firestore.indexes.json` incluye citas por empleado/cliente y el listener de notificaciones.
+
+## Desplegar Firebase manualmente
+
+No se ejecutó el despliegue. Después de revisar las reglas, el modelo de datos y el proyecto Firebase objetivo `euforia-e76a6`, una persona autorizada puede ejecutar desde la raíz del repo:
 
 ```bash
 cd functions
@@ -95,17 +97,16 @@ firebase deploy --only firestore:rules,firestore:indexes --project euforia-e76a6
 firebase deploy --only functions --project euforia-e76a6
 ```
 
-El comando `firebase deploy` modifica recursos reales: antes de ejecutarlo, revisa los archivos y confirma que el proyecto mostrado es `euforia-e76a6`. La función programada usa Cloud Scheduler y la publicación de Cloud Functions puede requerir el plan Firebase Blaze y facturación habilitada. No es necesario descargar ni pegar una clave service account en la app.
+Estos comandos modifican servicios reales. La tarea no los ejecutó. La Function programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar un service-account JSON en la app.
 
-## Desarrollo y validaciones realizadas
-
-En la raíz del proyecto:
+## Desarrollo y verificaciones
 
 ```bash
 pnpm install
 pnpm db:push
 pnpm check
 pnpm lint
+pnpm test
 pnpm dev
 
 cd functions
@@ -113,8 +114,11 @@ pnpm install
 pnpm run build
 ```
 
-`pnpm db:push` informó que no había cambios de esquema. En este entorno, `pnpm check`, `pnpm lint` y la compilación TypeScript de Cloud Functions finalizaron correctamente; las Rules compilaron en el emulador local de Firestore, sin desplegarlas. Metro respondió `200` en `8081` y su endpoint `/status` indicó `packager-status:running`; el proceso API quedó escuchando en `3000`. Metro notificó un warning no bloqueante de estilos `shadow*`, y las Functions un warning de que este equipo usa Node 22 mientras su runtime está fijado en Node 20. El bundle Preview no prueba autenticación real, no acredita despliegue de Rules/Functions ni valida FCM, credenciales nativas o un APK. No se afirma haber generado un APK EAS.
+Las últimas verificaciones locales: TypeScript, lint sin errores, 35 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló, y Expo pudo exportar bundle Android. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. La comprobación final de Rules usa únicamente el emulador local. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
 
-## Lo que todavía no está conectado
+## Pendientes fuera de esta fase
 
-La pantalla Avisar explica que no envía mensajes: WhatsApp oficial y envío FCM no están integrados. También siguen fuera de esta entrega la disponibilidad individual por profesional, feriados, cancelación/reprogramación completa, historial integral y analítica completa. No se simulan esos comportamientos.
+- Desplegar Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado.
+- Crear negocio/horarios/servicios reales; promover desde administración las cuentas de empleados registradas como clientes.
+- FCM push, gestión de feriados, descansos múltiples y disponibilidad variable por fecha, historial integral, cancelación/reprogramación completa y exportación.
+- Build EAS/APK firmado y credenciales nativas.

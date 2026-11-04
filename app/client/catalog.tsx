@@ -1,12 +1,12 @@
 import { useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { CalendarDays, Check, Clock3, Search, ShoppingBag, X } from "lucide-react-native";
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { CalendarDays, Check, Clock3, RefreshCw, Search, ShoppingBag, UserRound, X } from "lucide-react-native";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
-import { appointmentMillis, loadBusinesses, loadPublicEmployees, loadServices, reserveAppointment, subscribeClientAppointments, type AppointmentRecord, type BusinessRecord, type EmployeeRecord, type ServiceRecord } from "@/lib/appointments";
+import { appointmentMillis, getAvailableEmployeeSlots, loadBusinesses, loadServices, reserveAppointment, subscribeClientAppointments, type AppointmentAvailability, type AppointmentRecord, type BusinessRecord, type EmployeeAvailability, type ServiceRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
 
 function ClientCatalogContent() {
@@ -15,7 +15,6 @@ function ClientCatalogContent() {
   const [businesses, setBusinesses] = useState<BusinessRecord[]>([]);
   const [businessId, setBusinessId] = useState("");
   const [services, setServices] = useState<ServiceRecord[]>([]);
-  const [employees, setEmployees] = useState<EmployeeRecord[]>([]);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
   const [loadingBusinesses, setLoadingBusinesses] = useState(true);
   const [loadedBusinessId, setLoadedBusinessId] = useState("");
@@ -23,40 +22,45 @@ function ClientCatalogContent() {
   const [search, setSearch] = useState("");
   const [selectedService, setSelectedService] = useState<ServiceRecord | null>(null);
   const [date, setDate] = useState(defaultDate());
-  const [time, setTime] = useState("10:00");
+  const [availability, setAvailability] = useState<AppointmentAvailability | null>(null);
+  const [loadingAvailability, setLoadingAvailability] = useState(false);
+  const [availabilityError, setAvailabilityError] = useState("");
+  const [refreshKey, setRefreshKey] = useState(0);
   const [employeeId, setEmployeeId] = useState("");
+  const [slotStart, setSlotStart] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState("");
   const loadingServices = Boolean(businessId) && loadedBusinessId !== businessId;
+  const currentBusiness = businesses.find((business) => business.id === businessId);
 
   useEffect(() => {
     let active = true;
-    void loadBusinesses().then((items) => {
-      if (!active) return;
-      setBusinesses(items);
-      setBusinessId(items[0]?.id ?? "");
-    }).catch((reason) => {
-      if (active) setError(friendlyError(reason));
-    }).finally(() => { if (active) setLoadingBusinesses(false); });
-    return () => { active = false; };
+    const timer = setTimeout(() => {
+      void loadBusinesses().then((items) => {
+        if (!active) return;
+        setBusinesses(items);
+        setBusinessId(items[0]?.id ?? "");
+      }).catch((reason) => { if (active) setError(friendlyError(reason)); }).finally(() => { if (active) setLoadingBusinesses(false); });
+    }, 0);
+    return () => { active = false; clearTimeout(timer); };
   }, []);
 
   useEffect(() => {
     if (!businessId) return;
     let active = true;
-    Promise.all([loadServices(businessId), loadPublicEmployees(businessId)]).then(([serviceItems, employeeItems]) => {
-      if (!active) return;
-      setServices(serviceItems);
-      setEmployees(employeeItems);
-      setEmployeeId("");
-      setError("");
-      setLoadedBusinessId(businessId);
-    }).catch((reason) => {
-      if (!active) return;
-      setError(friendlyError(reason));
-      setLoadedBusinessId(businessId);
-    });
-    return () => { active = false; };
+    const timer = setTimeout(() => {
+      void loadServices(businessId).then((items) => {
+        if (!active) return;
+        setServices(items);
+        setError("");
+        setLoadedBusinessId(businessId);
+      }).catch((reason) => {
+        if (!active) return;
+        setError(friendlyError(reason));
+        setLoadedBusinessId(businessId);
+      });
+    }, 0);
+    return () => { active = false; clearTimeout(timer); };
   }, [businessId]);
 
   useEffect(() => {
@@ -65,72 +69,104 @@ function ClientCatalogContent() {
     let unsubscribe: (() => void) | undefined;
     const timer = setTimeout(() => {
       if (!active) return;
-      try {
-        unsubscribe = subscribeClientAppointments(uid, (items) => { if (active) setAppointments(items); }, (reason) => { if (active) setError(friendlyError(reason)); });
-      } catch (reason) {
-        if (active) setError(friendlyError(reason));
-      }
+      try { unsubscribe = subscribeClientAppointments(uid, (items) => { if (active) setAppointments(items); }, (reason) => { if (active) setError(friendlyError(reason)); }); }
+      catch (reason) { if (active) setError(friendlyError(reason)); }
     }, 0);
     return () => { active = false; clearTimeout(timer); unsubscribe?.(); };
   }, [uid]);
 
-  const currentBusiness = businesses.find((business) => business.id === businessId);
+  const selectedServiceId = selectedService?.id ?? "";
+  const currentBusinessId = currentBusiness?.id ?? "";
+
+  useEffect(() => {
+    if (!selectedServiceId || !currentBusinessId) return;
+    let active = true;
+    const dateIsValid = /^\d{4}-\d{2}-\d{2}$/.test(date);
+    const timer = setTimeout(() => {
+      setAvailability(null);
+      setAvailabilityError("");
+      setLoadingAvailability(true);
+      if (!dateIsValid) {
+        setAvailabilityError("Escribe una fecha válida con formato AAAA-MM-DD.");
+        setLoadingAvailability(false);
+        return;
+      }
+      void getAvailableEmployeeSlots({ negocioId: currentBusinessId, servicioId: selectedServiceId, fecha: date }).then((result) => {
+        if (!active) return;
+        setAvailability(result);
+        setEmployeeId((current) => result.empleados.some((item) => item.id === current) ? current : "");
+        setSlotStart("");
+      }).catch((reason) => { if (active) setAvailabilityError(availabilityMessage(reason)); }).finally(() => { if (active) setLoadingAvailability(false); });
+    }, 0);
+    return () => { active = false; clearTimeout(timer); };
+  }, [selectedServiceId, currentBusinessId, date, refreshKey]);
+
   const filteredServices = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase();
     return services.filter((service) => !normalizedSearch || `${service.nombre} ${service.descripcion}`.toLowerCase().includes(normalizedSearch));
   }, [services, search]);
-  const bookingConfigured = Boolean(currentBusiness?.modoNegocio);
-  const needsEmployee = currentBusiness?.modoNegocio === "multiEmpleado";
+  const selectedEmployee = availability?.empleados.find((item) => item.id === employeeId) ?? null;
 
   const book = async () => {
-    if (!user || !selectedService || !currentBusiness) return;
-    if (!currentBusiness.modoNegocio) { setNotice("El administrador debe configurar modoNegocio antes de habilitar reservas."); return; }
-    const start = parseLocalDateTime(date.trim(), time.trim());
-    if (!start) { setNotice("Revisa la fecha (AAAA-MM-DD) y la hora (HH:MM). "); return; }
-    if (start.getTime() <= Date.now()) { setNotice("Selecciona una hora futura."); return; }
-    if (needsEmployee && !employeeId) { setNotice("Selecciona a la profesional para continuar."); return; }
+    if (!user || !selectedService || !currentBusiness || !selectedEmployee || !slotStart) {
+      setNotice("Elige un empleado y una hora libre para continuar.");
+      return;
+    }
     setSubmitting(true);
     setNotice("");
     try {
-      const result = await reserveAppointment({ negocioId: currentBusiness.id, servicioId: selectedService.id, inicio: start.toISOString(), ...(needsEmployee ? { empleadoId: employeeId } : {}) });
-      setNotice(result.estado === "hold"
-        ? "Solicitud enviada. La franja queda reservada 30 minutos mientras el equipo responde."
+      const result = await reserveAppointment({ negocioId: currentBusiness.id, servicioId: selectedService.id, inicio: slotStart, empleadoId: selectedEmployee.id });
+      setNotice(result.estado === "hold" || result.estado === "pendiente_de_aprobacion"
+        ? "Solicitud enviada. El empleado recibió un aviso dentro de la app; al confirmarla aparecerá inmediatamente en Tus citas."
         : "Cita confirmada. Ya aparece en Tus citas.");
       setSelectedService(null);
+      setAvailability(null);
+      setEmployeeId("");
+      setSlotStart("");
     } catch (reason) {
       const code = (reason as { code?: string })?.code ?? "";
-      setNotice(code.includes("already-exists") ? "Ese horario acaba de ocuparse. Elige otra hora." : code.includes("permission-denied") ? "No se autorizó la reserva. Revisa tu perfil y las reglas/Functions de Firebase." : code.includes("failed-precondition") ? friendlyError(reason) : "No se pudo enviar la solicitud. Verifica conexión y Functions desplegadas.");
-    } finally {
-      setSubmitting(false);
-    }
+      setNotice(code.includes("already-exists") || code.includes("failed-precondition")
+        ? "Ese horario dejó de estar libre o el servicio/turno cambió. Actualizamos las franjas; elige una de las disponibles."
+        : code.includes("permission-denied") ? "No se autorizó la reserva. Revisa tu perfil y las reglas/Functions de Firebase." : "No se pudo enviar la solicitud. Verifica conexión y Functions desplegadas.");
+      setRefreshKey((value) => value + 1);
+    } finally { setSubmitting(false); }
+  };
+
+  const openBooking = (service: ServiceRecord) => {
+    setDate(defaultDate());
+    setAvailability(null);
+    setEmployeeId("");
+    setSlotStart("");
+    setSelectedService(service);
+    setNotice("");
   };
 
   return (
     <AuthGate allowedRoles={["cliente"]}>
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-          <AppHeader name={String(profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.heading}><Text style={styles.eyebrow}>SERVICIOS DE EUFORIA</Text><Text style={styles.title}>Elige cómo quieres sentirte</Text><Text style={styles.subtitle}>Consulta servicios reales y solicita tu próximo espacio.</Text></View>
-          {businesses.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((item) => <Pressable key={item.id} onPress={() => { setServices([]); setEmployees([]); setEmployeeId(""); setLoadedBusinessId(""); setBusinessId(item.id); }} style={[styles.businessChip, businessId === item.id && styles.businessChipActive]}><Text style={[styles.businessChipText, businessId === item.id && styles.businessChipTextActive]}>{item.nombre}</Text></Pressable>)}</ScrollView>}
+          <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
+          <View style={styles.heading}><Text style={styles.eyebrow}>SERVICIOS DE EUFORIA</Text><Text style={styles.title}>Elige tu próximo servicio</Text><Text style={styles.subtitle}>Selecciona trabajo, profesional y solo uno de los horarios libres calculados en Firebase.</Text></View>
+          {businesses.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((item) => <Pressable key={item.id} onPress={() => { setServices([]); setLoadedBusinessId(""); setBusinessId(item.id); }} style={[styles.businessChip, businessId === item.id && styles.businessChipActive]}><Text style={[styles.businessChipText, businessId === item.id && styles.businessChipTextActive]}>{item.nombre}</Text></Pressable>)}</ScrollView>}
           <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar servicio" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
           {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
-          {currentBusiness && !currentBusiness.modoNegocio ? <Text accessibilityRole="alert" style={styles.error}>Este negocio aún no está listo para reservas. Contacta al administrador.</Text> : null}
           {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-          {loadingBusinesses || loadingServices ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Cargando el catálogo real…</Text></View> : businesses.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title="Aún no hay negocios configurados" text="El administrador debe publicar el negocio en Firestore para habilitar las reservas." /> : filteredServices.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title={services.length === 0 ? "No hay servicios publicados" : "No encontramos ese servicio"} text={services.length === 0 ? "Los servicios, duración y precios reales aparecerán aquí cuando el administrador los configure en Firebase." : "Prueba otra búsqueda."} /> : filteredServices.map((service) => <ServiceCard key={service.id} service={service} bookingConfigured={bookingConfigured} onBook={() => { setDate(defaultDate()); setTime("10:00"); setSelectedService(service); setNotice(""); }} />)}
+          {loadingBusinesses || loadingServices ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Cargando el catálogo real…</Text></View> : businesses.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title="Aún no hay negocios configurados" text="El administrador debe activar el negocio en Firestore para habilitar las reservas." /> : filteredServices.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title={services.length === 0 ? "No hay servicios publicados" : "No encontramos ese servicio"} text={services.length === 0 ? "El administrador debe configurar nombre, precio, duración y activo en Firebase." : "Prueba otra búsqueda."} /> : filteredServices.map((service) => <ServiceCard key={service.id} service={service} onBook={() => openBooking(service)} />)}
 
           <View style={styles.section}><Text style={styles.sectionTitle}>Tus citas</Text><Text style={styles.sectionHint}>Se actualizan en tiempo real.</Text></View>
-          {appointments.length === 0 ? <Empty icon={<CalendarDays size={22} color={BRAND.primary} />} title="Todavía no tienes citas" text="Cuando reserves un servicio, lo verás aquí." /> : appointments.map((item) => <ClientAppointment key={item.id} item={item} />)}
+          {appointments.length === 0 ? <Empty icon={<CalendarDays size={22} color={BRAND.primary} />} title="Todavía no tienes citas" text="Cuando solicites un servicio, lo verás aquí." /> : appointments.map((item) => <ClientAppointment key={item.id} item={item} />)}
         </ScrollView>
         <Modal visible={Boolean(selectedService)} transparent animationType="slide" onRequestClose={() => setSelectedService(null)}>
           <View style={styles.modalShade}><View style={styles.sheet}>
-            <View style={styles.sheetHeader}><View><Text style={styles.sheetEyebrow}>SOLICITAR CITA</Text><Text style={styles.sheetTitle}>{selectedService?.nombre}</Text></View><Pressable onPress={() => setSelectedService(null)} style={styles.close}><X size={19} color={BRAND.wine} /></Pressable></View>
-            <Text style={styles.sheetDetails}>{currentBusiness?.nombre}{selectedService?.precio !== null && selectedService?.precio !== undefined ? ` · ${formatCurrency(selectedService.precio)}` : ""}{selectedService?.duracionMin ? ` · ${selectedService.duracionMin} min` : ""}</Text>
-            <Text style={styles.fieldLabel}>Fecha (AAAA-MM-DD)</Text><TextInput value={date} onChangeText={setDate} placeholder="2026-12-31" keyboardType="numbers-and-punctuation" style={styles.field} />
-            <Text style={styles.fieldLabel}>Hora (24 h)</Text><TextInput value={time} onChangeText={setTime} placeholder="10:00" keyboardType="numbers-and-punctuation" style={styles.field} />
-            {needsEmployee && <><Text style={styles.fieldLabel}>Profesional</Text>{employees.length === 0 ? <Text style={styles.emptyHint}>No hay profesionales públicas disponibles. Contacta al salón.</Text> : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.employeeList}>{employees.map((employee) => <Pressable key={employee.id} onPress={() => setEmployeeId(employee.id)} style={[styles.employeeChip, employeeId === employee.id && styles.employeeChipActive]}><Text style={[styles.employeeText, employeeId === employee.id && styles.employeeTextActive]}>{employee.nombre}</Text></Pressable>)}</ScrollView>}</>}
-            {notice ? <Text style={styles.notice}>{notice}</Text> : null}
-            <Pressable disabled={submitting || (needsEmployee && employees.length === 0)} onPress={() => void book()} style={[styles.bookButton, (submitting || (needsEmployee && employees.length === 0)) && styles.disabled]}><Text style={styles.bookText}>{submitting ? "Enviando…" : "Confirmar solicitud"}</Text><Check size={18} color="#FFFFFF" /></Pressable>
-            <Text style={styles.disclaimer}>El horario se valida en el servidor para evitar cruces de citas.</Text>
+            <View style={styles.sheetHeader}><View style={{ flex: 1 }}><Text style={styles.sheetEyebrow}>SOLICITAR CITA</Text><Text style={styles.sheetTitle}>{selectedService?.nombre}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Cerrar" onPress={() => setSelectedService(null)} style={styles.close}><X size={19} color={BRAND.wine} /></Pressable></View>
+            <Text style={styles.sheetDetails}>{currentBusiness?.nombre}{selectedService?.precio !== null && selectedService?.precio !== undefined ? ` · ${formatCurrency(selectedService.precio)}` : ""}{selectedService?.duracionMin ? ` · ${formatDuration(selectedService.duracionMin)}` : ""}</Text>
+            <Text style={styles.fieldLabel}>Fecha en Honduras (AAAA-MM-DD)</Text><View style={styles.dateRow}><TextInput value={date} onChangeText={(value) => { setDate(value); setSlotStart(""); }} placeholder="2026-11-10" keyboardType="numbers-and-punctuation" style={styles.dateInput} /><Pressable accessibilityRole="button" onPress={() => setRefreshKey((value) => value + 1)} style={styles.refresh}><RefreshCw size={16} color={BRAND.primaryDark} /></Pressable></View>
+            <Text style={styles.fieldLabel}>Profesional con espacios libres</Text>
+            {loadingAvailability ? <View style={styles.inlineState}><ActivityIndicator color={BRAND.primary} /><Text style={styles.inlineHint}>Buscando disponibilidad real…</Text></View> : availabilityError ? <Text accessibilityRole="alert" style={styles.error}>{availabilityError}</Text> : !availability || availability.empleados.length === 0 ? <Text style={styles.emptyHint}>No hay profesionales disponibles para ese servicio y fecha. Cambia la fecha o inténtalo más tarde.</Text> : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.employeeList}>{availability.empleados.map((employee) => <EmployeeChip key={employee.id} employee={employee} selected={employee.id === employeeId} onPress={() => { setEmployeeId(employee.id); setSlotStart(""); }} />)}</ScrollView>}
+            {selectedEmployee && <><Text style={styles.fieldLabel}>Horarios disponibles · bloques de 15 min</Text>{selectedEmployee.slots.length === 0 ? <Text style={styles.emptyHint}>Este profesional ya no tiene horas libres para la duración de este servicio.</Text> : <ScrollView style={styles.slotScroll} contentContainerStyle={styles.slotList}>{selectedEmployee.slots.map((slot) => <Pressable key={slot.inicio} accessibilityRole="radio" accessibilityState={{ checked: slot.inicio === slotStart }} onPress={() => setSlotStart(slot.inicio)} style={[styles.slot, slot.inicio === slotStart && styles.slotActive]}><Text style={[styles.slotText, slot.inicio === slotStart && styles.slotTextActive]}>{slot.hora}</Text></Pressable>)}</ScrollView>}</>}
+            {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
+            <Pressable disabled={submitting || !employeeId || !slotStart || loadingAvailability} onPress={() => void book()} style={[styles.bookButton, (submitting || !employeeId || !slotStart || loadingAvailability) && styles.disabled]}><Text style={styles.bookText}>{submitting ? "Enviando…" : "Enviar solicitud"}</Text><Check size={18} color="#FFFFFF" /></Pressable>
+            <Text style={styles.disclaimer}>El servidor vuelve a comprobar disponibilidad al enviar para impedir reservas simultáneas. Zona horaria: Tegucigalpa.</Text>
           </View></View>
         </Modal>
       </ScreenContainer>
@@ -140,46 +176,27 @@ function ClientCatalogContent() {
 
 export default function ClientCatalogScreen() { return <ClientCatalogContent />; }
 
-function ServiceCard({ service, bookingConfigured, onBook }: { service: ServiceRecord; bookingConfigured: boolean; onBook: () => void }) {
-  const configured = bookingConfigured && service.precio !== null && service.duracionMin !== null;
-  return <View style={styles.serviceCard}><View style={styles.serviceIcon}><ShoppingBag size={20} color={BRAND.primary} /></View><View style={styles.serviceBody}><Text style={styles.serviceName}>{service.nombre}</Text>{service.descripcion ? <Text style={styles.description}>{service.descripcion}</Text> : null}<View style={styles.serviceMeta}><Text style={styles.price}>{service.precio === null ? "Precio por confirmar" : formatCurrency(service.precio)}</Text>{service.duracionMin ? <Text style={styles.duration}><Clock3 size={12} color={BRAND.muted} /> {service.duracionMin} min</Text> : null}</View></View><Pressable disabled={!configured} onPress={onBook} style={[styles.selectButton, !configured && styles.disabled]}><Text style={styles.selectText}>{configured ? "Agendar" : "No disponible"}</Text></Pressable></View>;
+function ServiceCard({ service, onBook }: { service: ServiceRecord; onBook: () => void }) {
+  const configured = service.precio !== null && service.duracionMin !== null && service.duracionMin > 0;
+  return <View style={styles.serviceCard}><View style={styles.serviceIcon}><ShoppingBag size={20} color={BRAND.primary} /></View><View style={styles.serviceBody}><Text style={styles.serviceName}>{service.nombre}</Text>{service.descripcion ? <Text style={styles.description}>{service.descripcion}</Text> : null}<View style={styles.serviceMeta}><Text style={styles.price}>{service.precio === null ? "Precio por confirmar" : formatCurrency(service.precio)}</Text>{service.duracionMin ? <Text style={styles.duration}><Clock3 size={12} color={BRAND.muted} /> {formatDuration(service.duracionMin)}</Text> : null}</View></View><Pressable disabled={!configured} onPress={onBook} style={[styles.selectButton, !configured && styles.disabled]}><Text style={styles.selectText}>{configured ? "Agendar" : "No disponible"}</Text></Pressable></View>;
 }
+function EmployeeChip({ employee, selected, onPress }: { employee: EmployeeAvailability; selected: boolean; onPress: () => void }) { return <Pressable onPress={onPress} style={[styles.employeeChip, selected && styles.employeeChipActive]}>{employee.profileImage ? <Image source={{ uri: employee.profileImage }} style={styles.employeeImage} /> : <View style={styles.employeeIcon}><UserRound size={15} color={selected ? "#FFFFFF" : BRAND.primaryDark} /></View>}<Text style={[styles.employeeText, selected && styles.employeeTextActive]}>{employee.nombre}</Text><Text style={[styles.slotCount, selected && styles.employeeTextActive]}>{employee.slots.length} horas</Text></Pressable>; }
 function ClientAppointment({ item }: { item: AppointmentRecord }) {
   const millis = appointmentMillis(item.inicio);
   const when = millis ? new Date(millis).toLocaleString("es-HN", { timeZone: "America/Tegucigalpa", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "Fecha por confirmar";
-  return <View style={styles.clientAppointment}><View style={styles.appointmentTop}><Text style={styles.clientService}>{String(item.servicioNombre ?? "Servicio")}</Text><Text style={styles.status}>{item.estado.replaceAll("_", " ")}</Text></View><Text style={styles.appointmentInfo}>{String(item.negocioNombre ?? "EUFORIA")} · {when}</Text></View>;
+  return <View style={styles.clientAppointment}><View style={styles.appointmentTop}><Text style={styles.clientService}>{String(item.servicioNombre ?? "Servicio")}</Text><Text style={styles.status}>{item.estado.replaceAll("_", " ")}</Text></View><Text style={styles.appointmentInfo}>{String(item.negocioNombre ?? "EUFORIA")} · {String(item.empleadoNombre ?? "Profesional por asignar")}</Text><Text style={styles.appointmentInfo}>{when} · {formatDuration(Number(item.duracionMin) || 0)}</Text></View>;
 }
-function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
-  return <View style={styles.empty}>{icon}<Text style={styles.emptyTitle}>{title}</Text><Text style={styles.emptyText}>{text}</Text></View>;
-}
-function hondurasTimeParts(date: Date) {
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Tegucigalpa", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value]));
-  return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day), hour: Number(parts.hour), minute: Number(parts.minute) };
-}
+function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) { return <View style={styles.empty}>{icon}<Text style={styles.emptyTitle}>{title}</Text><Text style={styles.emptyText}>{text}</Text></View>; }
+function hondurasTimeParts(date: Date) { const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", { timeZone: "America/Tegucigalpa", year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date).map((part) => [part.type, part.value])); return { year: Number(parts.year), month: Number(parts.month), day: Number(parts.day), hour: Number(parts.hour), minute: Number(parts.minute) }; }
 function defaultDate() { const local = hondurasTimeParts(new Date()); const tomorrow = new Date(Date.UTC(local.year, local.month - 1, local.day + 1)); return `${tomorrow.getUTCFullYear()}-${String(tomorrow.getUTCMonth() + 1).padStart(2, "0")}-${String(tomorrow.getUTCDate()).padStart(2, "0")}`; }
-function parseLocalDateTime(date: string, time: string): Date | null {
-  const d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(date);
-  const t = /^(\d{2}):(\d{2})$/.exec(time);
-  if (!d || !t) return null;
-  const year = Number(d[1]); const month = Number(d[2]); const day = Number(d[3]); const hour = Number(t[1]); const minute = Number(t[2]);
-  if (month < 1 || month > 12 || day < 1 || day > 31 || hour > 23 || minute > 59) return null;
-  const result = new Date(Date.UTC(year, month - 1, day, hour + 6, minute, 0, 0));
-  const local = hondurasTimeParts(result);
-  if (local.year !== year || local.month !== month || local.day !== day || local.hour !== hour || local.minute !== minute) return null;
-  return result;
-}
-function friendlyError(reason: unknown) {
-  const code = (reason as { code?: string })?.code ?? "";
-  if (code.includes("permission-denied")) return "Firebase rechazó la lectura. Comprueba las reglas publicadas y el rol del perfil.";
-  return reason instanceof Error ? reason.message : "No se pudo cargar la información de Firebase.";
-}
+function formatDuration(value: number) { const hours = Math.floor(value / 60); const minutes = value % 60; return hours ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${minutes} min`; }
+function friendlyError(reason: unknown) { const code = (reason as { code?: string })?.code ?? ""; if (code.includes("permission-denied")) return "Firebase rechazó la lectura. Comprueba las reglas publicadas y el rol del perfil."; return reason instanceof Error ? reason.message : "No se pudo cargar la información de Firebase."; }
+function availabilityMessage(reason: unknown) { const code = (reason as { code?: string })?.code ?? ""; if (code.includes("failed-precondition")) return reason instanceof Error ? reason.message : "El negocio necesita horarios reales configurados."; if (code.includes("permission-denied")) return "No se pudo leer disponibilidad; confirma que la cuenta y las reglas del catálogo estén correctas."; return "No se pudo calcular disponibilidad. Confirma el despliegue de la Function obtenerDisponibilidad."; }
 
 const styles = StyleSheet.create({
-  content: { paddingBottom: 34 }, heading: { paddingHorizontal: 20, marginTop: 8 }, eyebrow: { color: BRAND.primary, fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, title: { color: BRAND.wine, fontSize: 27, lineHeight: 34, fontWeight: "800", marginTop: 6 }, subtitle: { color: BRAND.muted, fontSize: 13, marginTop: 6 },
-  businessList: { gap: 8, paddingHorizontal: 20, paddingTop: 16 }, businessChip: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border }, businessChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, businessChipText: { color: BRAND.wine, fontSize: 12, fontWeight: "700" }, businessChipTextActive: { color: "#FFFFFF" },
-  search: { flexDirection: "row", alignItems: "center", gap: 9, height: 50, backgroundColor: BRAND.surface, borderRadius: 18, margin: 20, paddingHorizontal: 15, borderColor: BRAND.border, borderWidth: 1 }, input: { flex: 1, color: BRAND.wine, fontSize: 14 }, notice: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, borderRadius: 13, padding: 11, marginHorizontal: 20, marginBottom: 10, fontSize: 12, lineHeight: 17 }, error: { color: BRAND.error, marginHorizontal: 20, marginBottom: 10, fontSize: 12, lineHeight: 17 }, state: { alignItems: "center", gap: 8, padding: 25 }, stateText: { color: BRAND.muted, fontSize: 12 },
-  empty: { alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 24, marginHorizontal: 20, padding: 25, borderWidth: 1, borderColor: BRAND.border }, emptyTitle: { color: BRAND.wine, fontSize: 15, fontWeight: "800", marginTop: 10, textAlign: "center" }, emptyText: { color: BRAND.muted, fontSize: 12, lineHeight: 18, textAlign: "center", marginTop: 5 },
-  serviceCard: { backgroundColor: BRAND.surface, borderRadius: 22, marginHorizontal: 20, marginBottom: 10, padding: 14, flexDirection: "row", alignItems: "center", gap: 11, borderWidth: 1, borderColor: BRAND.border }, serviceIcon: { width: 42, height: 42, borderRadius: 15, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, serviceBody: { flex: 1 }, serviceName: { color: BRAND.wine, fontSize: 14, fontWeight: "800" }, description: { color: BRAND.muted, fontSize: 11, lineHeight: 15, marginTop: 3 }, serviceMeta: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 6 }, price: { color: BRAND.primaryDark, fontSize: 12, fontWeight: "800" }, duration: { color: BRAND.muted, fontSize: 11, flexDirection: "row", alignItems: "center" }, selectButton: { backgroundColor: BRAND.primary, borderRadius: 999, paddingHorizontal: 12, paddingVertical: 9 }, selectText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" }, disabled: { opacity: 0.5 },
-  section: { paddingHorizontal: 20, marginTop: 23, marginBottom: 10 }, sectionTitle: { color: BRAND.wine, fontSize: 17, fontWeight: "800" }, sectionHint: { color: BRAND.muted, fontSize: 11, marginTop: 3 }, clientAppointment: { backgroundColor: BRAND.surface, borderRadius: 18, padding: 13, marginHorizontal: 20, marginBottom: 8, borderWidth: 1, borderColor: BRAND.border }, appointmentTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 7 }, clientService: { color: BRAND.wine, fontSize: 13, fontWeight: "800", flex: 1 }, status: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, fontSize: 10, fontWeight: "800", overflow: "hidden", textTransform: "capitalize" }, appointmentInfo: { color: BRAND.muted, fontSize: 11, marginTop: 6, textTransform: "capitalize" },
-  modalShade: { flex: 1, justifyContent: "flex-end", backgroundColor: "rgba(35,10,20,0.35)" }, sheet: { backgroundColor: BRAND.background, borderTopLeftRadius: 28, borderTopRightRadius: 28, paddingHorizontal: 22, paddingTop: 22, paddingBottom: 30, maxHeight: "92%" }, sheetHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" }, sheetEyebrow: { color: BRAND.primary, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 }, sheetTitle: { color: BRAND.wine, fontSize: 22, fontWeight: "800", marginTop: 4 }, close: { width: 38, height: 38, borderRadius: 19, backgroundColor: BRAND.surface, alignItems: "center", justifyContent: "center" }, sheetDetails: { color: BRAND.muted, fontSize: 12, marginTop: 6, marginBottom: 16 }, fieldLabel: { color: BRAND.wine, fontSize: 12, fontWeight: "800", marginTop: 10, marginBottom: 6 }, field: { minHeight: 48, backgroundColor: BRAND.surface, borderRadius: 14, borderWidth: 1, borderColor: BRAND.border, paddingHorizontal: 13, color: BRAND.wine, fontSize: 16 }, employeeList: { gap: 8 }, employeeChip: { borderRadius: 999, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border, paddingHorizontal: 13, paddingVertical: 9 }, employeeChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, employeeText: { color: BRAND.wine, fontSize: 12, fontWeight: "700" }, employeeTextActive: { color: "#FFFFFF" }, emptyHint: { color: BRAND.error, fontSize: 12, marginTop: 3 }, bookButton: { minHeight: 52, backgroundColor: BRAND.primary, borderRadius: 999, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, marginTop: 18 }, bookText: { color: "#FFFFFF", fontSize: 14, fontWeight: "800" }, disclaimer: { color: BRAND.muted, textAlign: "center", fontSize: 10, marginTop: 10 },
+  content: { paddingBottom: 34 }, heading: { paddingHorizontal: 20, marginTop: 8 }, eyebrow: { color: BRAND.primary, fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, title: { color: BRAND.wine, fontSize: 27, lineHeight: 34, fontWeight: "800", marginTop: 6 }, subtitle: { color: BRAND.muted, fontSize: 13, lineHeight: 19, marginTop: 6 }, businessList: { gap: 8, paddingHorizontal: 20, paddingTop: 16 }, businessChip: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border }, businessChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, businessChipText: { color: BRAND.wine, fontSize: 11, fontWeight: "700" }, businessChipTextActive: { color: "#FFFFFF" },
+  search: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 20, marginTop: 14, backgroundColor: BRAND.surface, borderRadius: 15, height: 45, paddingHorizontal: 13, borderWidth: 1, borderColor: BRAND.border }, input: { flex: 1, color: BRAND.wine, fontSize: 13 }, notice: { marginHorizontal: 20, marginTop: 9, color: BRAND.primaryDark, backgroundColor: BRAND.softPink, fontSize: 11, lineHeight: 16, padding: 10, borderRadius: 12 }, error: { marginHorizontal: 20, marginTop: 9, color: BRAND.error, fontSize: 11, lineHeight: 16 }, state: { alignItems: "center", gap: 8, padding: 25 }, stateText: { color: BRAND.muted, fontSize: 12 },
+  serviceCard: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: BRAND.surface, borderRadius: 19, padding: 13, marginHorizontal: 20, marginTop: 9, borderWidth: 1, borderColor: BRAND.border }, serviceIcon: { width: 37, height: 37, borderRadius: 13, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, serviceBody: { flex: 1 }, serviceName: { color: BRAND.wine, fontSize: 13, fontWeight: "800" }, description: { color: BRAND.muted, fontSize: 10, lineHeight: 14, marginTop: 3 }, serviceMeta: { flexDirection: "row", gap: 9, alignItems: "center", marginTop: 6 }, price: { color: BRAND.primaryDark, fontSize: 11, fontWeight: "800" }, duration: { color: BRAND.muted, fontSize: 10, flexDirection: "row", alignItems: "center" }, selectButton: { borderRadius: 999, paddingHorizontal: 11, paddingVertical: 9, backgroundColor: BRAND.primary }, selectText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" }, disabled: { opacity: .5 }, section: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", paddingHorizontal: 20, marginTop: 24, marginBottom: 8 }, sectionTitle: { color: BRAND.wine, fontSize: 16, fontWeight: "800" }, sectionHint: { color: BRAND.muted, fontSize: 10 }, empty: { alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 22, marginHorizontal: 20, marginTop: 8, padding: 21, borderWidth: 1, borderColor: BRAND.border }, emptyTitle: { color: BRAND.wine, fontSize: 14, fontWeight: "800", marginTop: 9, textAlign: "center" }, emptyText: { color: BRAND.muted, fontSize: 12, lineHeight: 17, textAlign: "center", marginTop: 4 },
+  clientAppointment: { backgroundColor: BRAND.surface, borderRadius: 17, borderWidth: 1, borderColor: BRAND.border, padding: 13, marginHorizontal: 20, marginBottom: 8 }, appointmentTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }, clientService: { color: BRAND.wine, fontSize: 12, fontWeight: "800", flex: 1 }, status: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, fontSize: 9, fontWeight: "800", textTransform: "capitalize", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, overflow: "hidden" }, appointmentInfo: { color: BRAND.muted, fontSize: 10, marginTop: 5 },
+  modalShade: { flex: 1, backgroundColor: "rgba(40,15,26,.42)", justifyContent: "flex-end" }, sheet: { maxHeight: "88%", backgroundColor: BRAND.background, borderTopLeftRadius: 26, borderTopRightRadius: 26, padding: 18, paddingBottom: 26 }, sheetHeader: { flexDirection: "row", alignItems: "center", gap: 9 }, sheetEyebrow: { color: BRAND.primary, fontSize: 9, letterSpacing: 1.1, fontWeight: "800" }, sheetTitle: { color: BRAND.wine, fontSize: 18, fontWeight: "800", marginTop: 3 }, close: { width: 36, height: 36, borderRadius: 18, backgroundColor: BRAND.surface, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: BRAND.border }, sheetDetails: { color: BRAND.muted, fontSize: 11, marginTop: 5 }, fieldLabel: { color: BRAND.wine, fontSize: 11, fontWeight: "800", marginTop: 13, marginBottom: 6 }, dateRow: { flexDirection: "row", gap: 8 }, dateInput: { flex: 1, height: 42, borderWidth: 1, borderColor: BRAND.border, borderRadius: 12, backgroundColor: BRAND.surface, color: BRAND.wine, paddingHorizontal: 11 }, refresh: { width: 42, height: 42, borderRadius: 12, borderWidth: 1, borderColor: BRAND.border, backgroundColor: BRAND.surface, alignItems: "center", justifyContent: "center" }, employeeList: { gap: 8, paddingVertical: 3 }, employeeChip: { flexDirection: "row", alignItems: "center", gap: 6, paddingVertical: 7, paddingHorizontal: 9, borderWidth: 1, borderColor: BRAND.border, borderRadius: 14, backgroundColor: BRAND.surface }, employeeChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, employeeImage: { width: 26, height: 26, borderRadius: 13 }, employeeIcon: { width: 26, height: 26, borderRadius: 13, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, employeeText: { color: BRAND.wine, fontSize: 10, fontWeight: "800" }, employeeTextActive: { color: "#FFFFFF" }, slotCount: { color: BRAND.muted, fontSize: 9 }, inlineState: { flexDirection: "row", gap: 8, alignItems: "center", paddingVertical: 9 }, inlineHint: { color: BRAND.muted, fontSize: 11 }, emptyHint: { color: BRAND.muted, fontSize: 11, lineHeight: 16, paddingVertical: 8 }, slotScroll: { maxHeight: 125 }, slotList: { flexDirection: "row", flexWrap: "wrap", gap: 7, paddingBottom: 3 }, slot: { minWidth: 61, height: 35, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: BRAND.border, borderRadius: 999, backgroundColor: BRAND.surface }, slotActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, slotText: { color: BRAND.wine, fontSize: 11, fontWeight: "700" }, slotTextActive: { color: "#FFFFFF" }, bookButton: { minHeight: 45, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, backgroundColor: BRAND.primary, borderRadius: 999, marginTop: 13 }, bookText: { color: "#FFFFFF", fontSize: 12, fontWeight: "800" }, disclaimer: { color: BRAND.muted, fontSize: 9, lineHeight: 14, textAlign: "center", marginTop: 7 },
 });

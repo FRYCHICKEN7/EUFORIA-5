@@ -1,42 +1,39 @@
 # Estado de entrega EUFORIA
 
-## Código implementado
+## Funcionalidad implementada
 
-- [x] Migrar selectivamente pantallas, componentes, tema, utilidades y branding del repositorio fuente al starter móvil Expo Router existente; conservar su runtime, navegación raíz, puertos `8081`/`3000` e identificadores nuevos del proyecto gestionado, sin enviar cambios al GitHub fuente.
-- [x] Mantener el logo EUFORIA sin recorte y con margen seguro en icono, splash, favicon y variantes adaptativas; conservar la marca rosa/vino y el nombre del producto.
-- [x] Implementar acceso Firebase Email/Password, selector de rol Cliente/Empleado/Administrador, control del perfil de `usuarios/{uid}`, recuperación por correo y cambio de contraseña con reautenticación cuando el usuario provee su contraseña actual.
-- [x] Implementar registro público de clientes creando `usuarios/{uid}` con el UID de Authentication, `email`, `rol: "cliente"`, `createdAt` de servidor y los datos opcionales admitidos; no dejar que el formulario público elija roles privilegiados ni mostrar éxito si la creación del perfil falla.
-- [x] Implementar lectura de perfil en sesión y redirección por rol; proteger las vistas administrativas, del empleado y del cliente. Las variables se cargan desde `EXPO_PUBLIC_FIREBASE_*`; `.env` local y credenciales Admin SDK quedan fuera del control de versiones.
-- [x] Compatibilidad con perfiles Firebase legados: aceptar `role: "admin"` además de `rol: "admin"`/`"administrador"` en login, navegación, Firestore Rules y Cloud Functions; siempre exigir `usuarios/{UID autenticado}` y denegar perfiles con campos `role` y `rol` contradictorios. Mostrar el UID autenticado cuando falta el documento.
-- [x] Entregar `firestore.rules` con denegación por defecto: lectura del perfil propio, creación propia exclusivamente con rol `cliente`, perfiles administrativos leídos solo por roles autorizados, catálogo público autenticado y acceso a citas limitado al cliente propietario, profesional asignado o administrador reconocido por su perfil. No permite escrituras directas no confiables de citas ni avisos.
-- [x] Entregar reglas acotadas para `usuarios/{uid}`, `clientes/{clienteId}`, `negocios/{negocioId}` y subcolecciones; bloquear autoelevación y proteger rol/UID de perfil. Las reglas compilaron en el emulador local de Firestore.
-- [x] Implementar Cloud Functions `reservarCita`, `aprobarCita`, `rechazarCita`, `expirarHolds` y `registrarAviso`. La reserva deriva el cliente de `request.auth.uid`, exige perfil `cliente`, servicio/negocio/profesional activos y modo válido, comprueba duración/precio, horario local de Tegucigalpa, apertura/cierre/recesos y fecha futura; la transacción rechaza solapamientos del mismo profesional/negocio. La función de reserva y las transiciones de cita se compilaron con TypeScript.
-- [x] Mantener estados `hold`, `pendiente_de_aprobacion`, `confirmada`, `en_curso`, `completada`, `cancelada`, `rechazada` y `expirada`. El modo `unipersonal` confirma al reservar; `multiEmpleado` crea una reserva temporal de 30 minutos que solo puede decidir un administrador o el empleado asignado. La expiración programada corre cada cinco minutos.
-- [x] Conectar catálogo/servicios a Firestore, y las citas del cliente, el resumen administrativo, los perfiles de Clientes y la agenda de administrador/empleado a listeners `onSnapshot` con estados de error/vacío; el personal autorizado ve sus citas, el administrador ve la agenda y cada cliente solo sus propias citas. No agregar servicios, precios, personas ni citas de demostración.
-- [x] Entregar `firestore.indexes.json` para las consultas usadas por perfiles, agenda, profesionales y expiración de reservas; documentar el esquema requerido en README.
-- [x] Mantener Ajustes, cierre de sesión, preferencias de apariencia y mensajes veraces: WhatsApp/FCM, exportación y respaldo se muestran como no conectados; no se simulan envíos.
+- [x] **Perfiles y datos reales de clientes:** administración escucha perfiles reales desde `users/{uid}` y `usuarios/{uid}`, reconoce `role/rol` y los valores legacy `customer/client`, y muestra los campos que existan (`email`, `id`/UID, `identityNumber`, `name`, `phone`, `profileImage`, rol y fecha). Los listeners no tienen tope fijo de 500 registros; no se inventan datos.
+- [x] **Registro y creación segura de empleado:** el registro público crea una cuenta Firebase Authentication y perfil `cliente` (`role/rol: "cliente"`) enlazado al UID en ambas colecciones de perfil. La cuenta no puede autoasignarse roles. Administración selecciona un cliente ya registrado, indica negocio y código único `Empleado`, y solicita promoción mediante Cloud Function. La Function verifica admin, cuenta real y habilitada en Authentication, perfil cliente, negocio y código; sincroniza `users`, `usuarios`, `empleados/{uid}` y el perfil operativo del negocio. El esquema empleado usa `Empleado`, `email`, `id` igual al UID Auth, `name`, foto propia si existe y `role/rol: "empleado"`.
+- [x] **Disponibilidad semanal:** la persona autorizada define en Honduras los siete días (`0` domingo…`6` sábado), activa días, cambia inicio y fin `HH:mm` y maneja la casilla explícita **Disponible para citas**. Los defaults del formulario 08:00–17:00 no se guardan hasta pulsar Guardar; una Function comprueba que solo se edite la disponibilidad propia.
+- [x] **Servicio, profesional y agenda del cliente:** administración puede crear/editar servicios reales con nombre, precio y `duracionMin` (5–480). El ejemplo L. 120/90 min se representa como 1 h 30 min. El cliente elige servicio, fecha, profesional visible y una franja calculada por Function en zona `America/Tegucigalpa`, cada 15 minutos. Se excluyen horas pasadas, recesos y solicitudes donde toda la duración no cabe dentro del horario de negocio y del profesional.
+- [x] **Franjas ocupadas:** el cálculo evita intervalos activos del mismo empleado con estado `hold` vigente, `pendiente_de_aprobacion`, `confirmada` o `en_curso`. Un servicio de 90 minutos que comienza a las 10:00 no se ofrece cuando esa franja se cruza con una cita ocupada; la transacción vuelve a validar al reservar y el cliente vuelve a actualizar los huecos ante conflicto.
+- [x] **Solicitud y confirmación:** reserva transaccional guarda profesional, cliente, servicio, precio, duración, comienzo/fin, estado `hold` y vencimiento de 30 minutos, y crea aviso Firestore para el empleado asignado. La agenda del empleado escucha citas/notificaciones en vivo y permite confirmar o rechazar; la confirmación pasa a `confirmada` y el cliente la ve por listener en tiempo real. No se presenta como push móvil de sistema operativo.
+- [x] **Inicio, finalización y métricas:** solo el empleado asignado puede iniciar la cita confirmada (`en_curso`, `startedAt`) y finalizarla (`completada`, `completedAt`, `duracionRealMin/Seg`) mediante Functions. El resumen del administrador presenta conteo y promedio de duración real por empleado/servicio.
+- [x] **Protección Firebase:** Rules conservan denegación por defecto, acceso a perfiles propios/roles autorizados, lectura administrativa de clientes, lectura de citas por cliente/profesional/admin y bloqueo de escrituras directas a roles, disponibilidad, citas y transiciones privilegiadas. Índices incluyen citas por empleado/cliente, selector de profesionales y notificaciones.
+- [x] **Documentación:** README explica perfiles, los campos del esquema enviado, horarios reales, servicios/duración, creación segura de empleado, confirmaciones, límites y comandos de despliegue manual.
 
-## Verificado en el entorno de desarrollo
+## Verificación local
 
-- [x] `pnpm check` finalizó correctamente.
-- [x] `pnpm lint` finalizó sin errores de lint; Node notificó un warning no bloqueante sobre el formato ESM de `eslint.config.js`.
-- [x] `cd functions && pnpm run build` finalizó correctamente; el entorno usa Node 22 y el runtime de Functions del proyecto está fijado a Node 20.
-- [x] `pnpm db:push` indicó que no había cambios de esquema por aplicar.
-- [x] Rules compilaron con Firebase Emulator usando un proyecto demo local, sin iniciar sesión, desplegar ni escribir en el Firebase real.
-- [x] Metro respondió HTTP 200 en el puerto `8081` y `/status` devolvió `packager-status:running`; el API del starter escuchó en `3000`.
-- [x] Se comprobó la presencia de las variables Firebase necesarias en el entorno gestionado actual sin imprimir sus valores. No se hizo una prueba de inicio de sesión ni de reserva contra datos de producción.
+- [x] `pnpm check` (TypeScript) finalizó sin errores.
+- [x] `pnpm lint` finalizó sin errores; Node emitió solo el warning no bloqueante de formato ESM de `eslint.config.js`.
+- [x] `pnpm test`: 35 pruebas pasaron; una prueba preexistente quedó omitida.
+- [x] `cd functions && pnpm run build` finalizó; el entorno de desarrollo usa Node 22 aunque Functions fija Node 20 (warning de engine, no bloqueó el build).
+- [x] Rules compilaron con emulador Firestore local, sin desplegar ni tocar la base Firebase real.
+- [x] `firestore.indexes.json` pasó parseo JSON y `git diff --check`.
+- [x] Expo exportó bundle Android y bundle Web para Preview; esto no produce APK/EAS.
+- [x] Metro `/status` y la ruta web raíz respondieron, y los procesos gestionados ocuparon los puertos 8081/3000.
+- [x] Revisión de solo lectura de flujos UI/Rules/Functions: no encontró fallos bloqueantes; sí detectó un límite silencioso de 500 perfiles, ya eliminado de los listeners de clientes y empleados.
+- [x] No se hicieron escrituras de prueba en Firebase producción ni se desplegaron Rules/índices/Functions.
 
-## Pendiente antes de habilitar Firebase real
+## Pendiente antes de usar con datos reales
 
-- [ ] Verificar en Firebase Console que exista `usuarios/{UID exacto mostrado en Authentication}` para `euforiasalonhn@gmail.com`; asignar desde un entorno confiable `rol: "administrador"`, `rol: "admin"` o `role: "admin"` y un `createdAt` Timestamp si el documento falta. No asignar el rol desde la app.
-- [ ] Crear los documentos de negocio/servicios reales: `negocios/{negocioId}` con `nombre`, `activo: true` y `modoNegocio: "unipersonal"` o `"multiEmpleado"`; `servicios/{servicioId}` con `nombre`, `precio` numérico, `duracionMin` entero (5–480) y `activo: true`; y `horarios/{dia}` para cada día (`0` domingo … `6` sábado), con `activo`, `apertura`, `cierre` y `recesos` válidos. No hay datos de negocio inventados.
-- [ ] Si se usa `multiEmpleado`, crear las cuentas autorizadas y perfiles `usuarios/{uid}` con `rol: "empleado"`; asociar cada profesional en `negocios/{negocioId}/empleados/{empleadoId}` mediante `usuarioId`, `nombre`, `publica: true` y `activo: true`.
-- [ ] Revisar el ID objetivo `euforia-e76a6` y desplegar manualmente `firestore.rules`, `firestore.indexes.json` y Cloud Functions según los comandos del README. Esto aún no se ejecutó y modifica recursos reales; no subir claves privadas ni service-account JSON a la app.
-- [ ] Después del despliegue y la configuración real, hacer una validación controlada de login administrador, alta de cliente, perfil visible en vivo y solicitud/aprobación de cita. Esa prueba no se realizó para evitar escrituras no autorizadas en la base compartida.
+- [ ] En Firebase Console verificar que el ID del perfil admin sea exactamente el UID vigente de Authentication y que los campos de rol no sean contradictorios.
+- [ ] Crear los documentos reales del negocio, servicios y horario comercial; el horario sugerido del empleado no es horario del negocio.
+- [ ] Verificar en Authentication que cada empleado exista; registrarse públicamente lo crea inicialmente como cliente, después admin lo promueve desde Clientes.
+- [ ] Desplegar manualmente `firestore.rules`, `firestore.indexes.json` y Functions según README; el despliegue modifica recursos reales y no se ejecutó.
+- [ ] Validar login, promoción, reserva y decisión con cuentas y datos reales después de desplegar; no se ejecutó esta prueba porque generaría/escribiría datos de producción.
 
-## Fuera de esta entrega
+## Fuera de esta fase
 
-- [ ] Build APK/EAS no ejecutado; no afirmar que exista un instalador descargable.
-- [ ] No integrados envío oficial WhatsApp ni tokens/proceso de autorización FCM.
-- [ ] No cubiertos gestión operativa completa de empleados, disponibilidad individual por turno, feriados, cancelación/reprogramación integral, historial completo ni analítica avanzada.
-- [ ] Exportación y respaldo de datos siguen sin conectar.
+- [ ] Notificación push de Android/iOS con FCM, gestión de feriados/turnos especiales, descansos múltiples, reprogramación/cancelación integral y exportaciones.
+- [ ] Build EAS/APK instalable y firmado; no se generó.

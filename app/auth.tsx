@@ -3,11 +3,12 @@ import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, Text, TextInput,
 import { Image } from "expo-image";
 import { router } from "expo-router";
 import { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { doc, getDoc, serverTimestamp, setDoc } from "firebase/firestore";
-import { ArrowLeft, ArrowRight, Eye, EyeOff, LockKeyhole, Mail, Phone, UserRound } from "lucide-react-native";
+import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
+import { ArrowLeft, ArrowRight, CreditCard, Eye, EyeOff, LockKeyhole, Mail, Phone, UserRound } from "lucide-react-native";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
 import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
+import { loadUserProfile } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
 
 type AuthMode = "login" | "register" | "recovery";
@@ -19,7 +20,7 @@ function getAuthErrorMessage(error: unknown) {
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) return "Correo o contraseña incorrectos.";
   if (code.includes("email-already-in-use")) return "Este correo ya está registrado. Inicia sesión o recupera el acceso.";
   if (code.includes("weak-password")) return "La contraseña debe tener al menos 6 caracteres.";
-  if (code.includes("permission-denied")) return "Firebase rechazó la lectura o creación del perfil. Revisa las reglas Firestore de EUFORIA.";
+  if (code.includes("permission-denied")) return "Firebase rechazó la lectura o escritura del perfil. Despliega las Rules compatibles con users y usuarios.";
   if (code.includes("network-request-failed")) return "No hay conexión. Comprueba tu internet e inténtalo de nuevo.";
   return "No se pudo completar la operación. Revisa Firebase e inténtalo de nuevo.";
 }
@@ -31,6 +32,7 @@ export default function AuthScreen() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [identityNumber, setIdentityNumber] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
@@ -48,18 +50,22 @@ export default function AuthScreen() {
     setMessage("");
     const normalizedEmail = email.trim().toLowerCase();
     if (!normalizedEmail || !/^\S+@\S+\.\S+$/.test(normalizedEmail)) {
-        setMessage("Escribe un correo electrónico válido.");
-        return;
-      }
-      if (mode === "register" && (name.trim().length < 2 || name.trim().length > 100)) {
-        setMessage("Escribe un nombre completo de 2 a 100 caracteres.");
-        return;
-      }
-      if (mode === "register" && phone.trim().length > 20) {
-        setMessage("El teléfono no puede tener más de 20 caracteres.");
-        return;
-      }
-      const configured = await ensureFirebaseConfigured();
+      setMessage("Escribe un correo electrónico válido.");
+      return;
+    }
+    if (mode === "register" && (name.trim().length < 2 || name.trim().length > 100)) {
+      setMessage("Escribe un nombre completo de 2 a 100 caracteres.");
+      return;
+    }
+    if (mode === "register" && phone.trim().length > 20) {
+      setMessage("El teléfono no puede tener más de 20 caracteres.");
+      return;
+    }
+    if (mode === "register" && identityNumber.trim().length > 40) {
+      setMessage("El número de identidad no puede tener más de 40 caracteres.");
+      return;
+    }
+    const configured = await ensureFirebaseConfigured();
     const auth = firebaseAuth;
     const store = db;
     if (!configured || !auth || !store) {
@@ -79,53 +85,71 @@ export default function AuthScreen() {
         return;
       }
       if (mode === "register" && role !== "cliente") {
-        setMessage("El registro público solo crea cuentas de cliente.");
+        setMessage("El registro público siempre crea un perfil cliente. Administración puede aprobar después su perfil de empleado.");
         return;
       }
 
       const credential = mode === "register"
         ? await createUserWithEmailAndPassword(auth, normalizedEmail, password)
         : await signInWithEmailAndPassword(auth, normalizedEmail, password);
-      const userRef = doc(store, "usuarios", credential.user.uid);
-      let profileSnapshot = await getDoc(userRef);
+      let profile = await loadUserProfile(credential.user.uid);
 
-      if (mode === "register" && !profileSnapshot.exists()) {
-        await setDoc(userRef, {
+      if (mode === "register") {
+        const profileData = {
+          id: credential.user.uid,
           email: credential.user.email ?? normalizedEmail,
-          rol: "cliente",
-          createdAt: serverTimestamp(),
+          name: name.trim(),
           displayName: name.trim(),
-          ...(phone.trim() ? { phone: phone.trim() } : {}),
-        });
-        profileSnapshot = await getDoc(userRef);
-      }
-      // Repara un alta Auth previa sin perfil, manteniendo la creación segura como cliente.
-      if (mode === "login" && role === "cliente" && !profileSnapshot.exists()) {
-        await setDoc(userRef, {
-          email: credential.user.email ?? normalizedEmail,
+          profileImage: "",
+          role: "cliente",
           rol: "cliente",
           createdAt: serverTimestamp(),
-        });
-        profileSnapshot = await getDoc(userRef);
+          ...(phone.trim() ? { phone: phone.trim() } : {}),
+          ...(identityNumber.trim() ? { identityNumber: identityNumber.trim() } : {}),
+        };
+        const batch = writeBatch(store);
+        batch.set(doc(store, "users", credential.user.uid), profileData);
+        batch.set(doc(store, "usuarios", credential.user.uid), profileData);
+        await batch.commit();
+        profile = await loadUserProfile(credential.user.uid);
       }
-      if (!profileSnapshot.exists()) {
+
+      // Solo repara cuentas cliente sin perfil; nunca crea ni eleva cuentas privilegiadas.
+      if (mode === "login" && role === "cliente" && !profile) {
+        const profileData = {
+          id: credential.user.uid,
+          email: credential.user.email ?? normalizedEmail,
+          role: "cliente",
+          rol: "cliente",
+          createdAt: serverTimestamp(),
+        };
+        const batch = writeBatch(store);
+        batch.set(doc(store, "users", credential.user.uid), profileData);
+        batch.set(doc(store, "usuarios", credential.user.uid), profileData);
+        await batch.commit();
+        profile = await loadUserProfile(credential.user.uid);
+      }
+      if (!profile) {
         await signOut(auth);
-        setMessage(`No existe usuarios/${credential.user.uid}. Crea el perfil con el UID exacto de Authentication; se aceptan los campos role o rol.`);
+        setMessage(`No existe un perfil vinculado al UID ${credential.user.uid}. Comprueba users, usuarios o empleados en Firestore.`);
         return;
       }
 
-      const storedRole = profileRole(profileSnapshot.data());
-      const isAdmin = storedRole === "admin";
-      const isEmployee = storedRole === "empleado";
-      const isClient = storedRole === "cliente";
-      const roleMatches = role === "administrador" ? isAdmin : role === "empleado" ? isEmployee : isClient;
+      const storedRole = profileRole(profile);
+      const roleMatches = role === "administrador"
+        ? storedRole === "admin"
+        : role === "empleado"
+          ? storedRole === "empleado"
+          : storedRole === "cliente";
       if (!roleMatches) {
         await signOut(auth);
-        setMessage(role === "administrador"
-          ? "Esta cuenta no tiene rol de administrador. En usuarios/{UID de Authentication}, usa role: admin o rol: administrador."
-          : role === "empleado"
-            ? "Esta cuenta no tiene rol empleado. Solicita que verifiquen el perfil usuarios/{UID de Authentication}."
-            : "Esta cuenta tiene un rol distinto. Selecciona el tipo de acceso correspondiente.");
+        setMessage(storedRole === null
+          ? "Los perfiles encontrados tienen un rol inválido o contradictorio. Pide a administración que los reconcilie."
+          : role === "administrador"
+            ? "Esta cuenta no tiene rol de administrador en su perfil vinculado al UID de Authentication."
+            : role === "empleado"
+              ? "Esta cuenta no tiene perfil aprobado de empleado. Regístrate como cliente y solicita la activación al administrador."
+              : "Esta cuenta tiene un rol distinto. Selecciona el tipo de acceso correspondiente.");
         return;
       }
       router.replace(role === "administrador" ? "/(tabs)" : role === "empleado" ? "/employee/schedule" : "/client/catalog");
@@ -133,7 +157,7 @@ export default function AuthScreen() {
       console.warn("Authentication/Firestore rechazó la operación.", (error as { code?: string })?.code);
       setMessage(getAuthErrorMessage(error));
       if (firebaseAuth?.currentUser) {
-        try { await signOut(firebaseAuth); } catch { /* se conserva el error original */ }
+        try { await signOut(firebaseAuth); } catch { /* conserva el error original */ }
       }
     } finally {
       setLoading(false);
@@ -145,7 +169,7 @@ export default function AuthScreen() {
     ? "Te enviaremos un enlace seguro para crear una nueva contraseña."
     : mode === "login"
       ? "Selecciona tu tipo de acceso e ingresa a EUFORIA."
-      : "Regístrate como cliente para reservar y cuidar tus próximas visitas.";
+      : "Regístrate como cliente; si eres parte del equipo, administración activará tu perfil de empleado.";
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.screen}>
@@ -158,24 +182,16 @@ export default function AuthScreen() {
         <Text style={styles.subtitle}>{subtitle}</Text>
         {mode === "login" && (
           <View style={styles.roleSelector}>
-            <Pressable accessibilityRole="button" onPress={() => setRole("cliente")} style={[styles.roleButton, role === "cliente" && styles.roleButtonActive]}>
-              <Text style={[styles.roleText, role === "cliente" && styles.roleTextActive]}>Cliente</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" onPress={() => setRole("administrador")} style={[styles.roleButton, role === "administrador" && styles.roleButtonActive]}>
-              <Text style={[styles.roleText, role === "administrador" && styles.roleTextActive]}>Administrador</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" onPress={() => setRole("empleado")} style={[styles.roleButton, role === "empleado" && styles.roleButtonActive]}>
-              <Text style={[styles.roleText, role === "empleado" && styles.roleTextActive]}>Empleado</Text>
-            </Pressable>
+            <RoleButton label="Cliente" active={role === "cliente"} onPress={() => setRole("cliente")} />
+            <RoleButton label="Administrador" active={role === "administrador"} onPress={() => setRole("administrador")} />
+            <RoleButton label="Empleado" active={role === "empleado"} onPress={() => setRole("empleado")} />
           </View>
         )}
         <View style={styles.form}>
-          {mode === "register" && <View style={styles.inputWrap}><UserRound size={18} color={BRAND.muted} /><TextInput value={name} onChangeText={setName} placeholder="Nombre completo" placeholderTextColor={BRAND.muted} autoCapitalize="words" autoCorrect={false} textContentType="name" style={styles.input} accessibilityLabel="Nombre completo" /></View>}
-          <View style={styles.inputWrap}>
-            <Mail size={18} color={BRAND.muted} />
-            <TextInput value={email} onChangeText={setEmail} placeholder="Correo electrónico" placeholderTextColor={BRAND.muted} keyboardType="email-address" autoCapitalize="none" autoCorrect={false} textContentType="emailAddress" style={styles.input} accessibilityLabel="Correo electrónico" />
-          </View>
-          {mode === "register" && <View style={styles.inputWrap}><Phone size={18} color={BRAND.muted} /><TextInput value={phone} onChangeText={setPhone} placeholder="Teléfono (opcional)" placeholderTextColor={BRAND.muted} keyboardType="phone-pad" textContentType="telephoneNumber" style={styles.input} accessibilityLabel="Teléfono opcional" /></View>}
+          {mode === "register" && <Input icon={<UserRound size={18} color={BRAND.muted} />} value={name} onChangeText={setName} placeholder="Nombre completo" accessibilityLabel="Nombre completo" autoCapitalize="words" textContentType="name" />}
+          <Input icon={<Mail size={18} color={BRAND.muted} />} value={email} onChangeText={setEmail} placeholder="Correo electrónico" accessibilityLabel="Correo electrónico" keyboardType="email-address" autoCapitalize="none" textContentType="emailAddress" />
+          {mode === "register" && <Input icon={<Phone size={18} color={BRAND.muted} />} value={phone} onChangeText={setPhone} placeholder="Teléfono (opcional)" accessibilityLabel="Teléfono opcional" keyboardType="phone-pad" textContentType="telephoneNumber" />}
+          {mode === "register" && <Input icon={<CreditCard size={18} color={BRAND.muted} />} value={identityNumber} onChangeText={setIdentityNumber} placeholder="Identidad (opcional)" accessibilityLabel="Número de identidad opcional" autoCapitalize="characters" />}
           {mode !== "recovery" && (
             <View style={styles.inputWrap}>
               <LockKeyhole size={18} color={BRAND.muted} />
@@ -188,7 +204,7 @@ export default function AuthScreen() {
         </View>
         {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
         <Pressable accessibilityRole="button" disabled={loading} onPress={() => void submit()} style={[styles.primary, loading && styles.disabled]}>
-          <Text style={styles.primaryText}>{loading ? "Procesando…" : mode === "recovery" ? "Enviar correo" : mode === "login" ? `Iniciar como ${role === "administrador" ? "administrador" : role === "empleado" ? "empleado" : "cliente"}` : "Crear cuenta"}</Text>
+          <Text style={styles.primaryText}>{loading ? "Procesando…" : mode === "recovery" ? "Enviar correo" : mode === "login" ? `Iniciar como ${role === "administrador" ? "administrador" : role === "empleado" ? "empleado" : "cliente"}` : "Crear cuenta cliente"}</Text>
           <ArrowRight size={18} color="#FFFFFF" />
         </Pressable>
         {mode === "login" && <Pressable onPress={() => { setMode("recovery"); setMessage(""); }} style={styles.forgot}><Text style={styles.linkText}>¿Olvidaste tu contraseña?</Text></Pressable>}
@@ -198,10 +214,18 @@ export default function AuthScreen() {
             <Text style={styles.switchText}>{mode === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}<Text style={styles.switchAccent}>{mode === "login" ? "Regístrate" : "Inicia sesión"}</Text></Text>
           </Pressable>
         )}
-        <Text style={styles.security}>Tus datos se validan con Firebase Authentication.</Text>
+        <Text style={styles.security}>{mode === "register" ? "El registro crea un perfil cliente. Administración aprueba el acceso de empleado." : "Tus datos se validan con Firebase Authentication."}</Text>
       </View>
     </KeyboardAvoidingView>
   );
+}
+
+function RoleButton({ label, active, onPress }: { label: string; active: boolean; onPress: () => void }) {
+  return <Pressable accessibilityRole="button" onPress={onPress} style={[styles.roleButton, active && styles.roleButtonActive]}><Text style={[styles.roleText, active && styles.roleTextActive]}>{label}</Text></Pressable>;
+}
+
+function Input({ icon, accessibilityLabel, ...props }: { icon: React.ReactNode; accessibilityLabel: string } & React.ComponentProps<typeof TextInput>) {
+  return <View style={styles.inputWrap}>{icon}<TextInput {...props} placeholderTextColor={BRAND.muted} style={styles.input} accessibilityLabel={accessibilityLabel} autoCorrect={false} /></View>;
 }
 
 const styles = StyleSheet.create({
@@ -210,7 +234,7 @@ const styles = StyleSheet.create({
   content: { flex: 1, paddingHorizontal: 24, paddingTop: 62, alignItems: "center" },
   logo: { width: 82, height: 82, borderRadius: 41, backgroundColor: BRAND.surface },
   brand: { color: BRAND.wine, fontSize: 21, fontWeight: "900", letterSpacing: 3, marginTop: 11 },
-  eyebrow: { color: BRAND.primaryDark, fontSize: 10, fontWeight: "800", letterSpacing: 1.4, marginTop: 35 },
+  eyebrow: { color: BRAND.primaryDark, fontSize: 10, fontWeight: "800", letterSpacing: 1.4, marginTop: 25 },
   title: { color: BRAND.wine, fontSize: 30, lineHeight: 36, fontWeight: "800", textAlign: "center", marginTop: 8 },
   subtitle: { color: BRAND.muted, fontSize: 14, lineHeight: 20, textAlign: "center", marginTop: 8, maxWidth: 320 },
   roleSelector: { width: "100%", flexDirection: "row", gap: 8, marginTop: 18, padding: 4, borderRadius: 999, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border },
@@ -218,11 +242,11 @@ const styles = StyleSheet.create({
   roleButtonActive: { backgroundColor: BRAND.primary },
   roleText: { color: BRAND.primaryDark, fontSize: 13, fontWeight: "800" },
   roleTextActive: { color: "#FFFFFF" },
-  form: { width: "100%", gap: 12, marginTop: 15 },
+  form: { width: "100%", gap: 10, marginTop: 15 },
   inputWrap: { minHeight: 54, borderWidth: 1, borderColor: BRAND.border, backgroundColor: BRAND.surface, borderRadius: 18, paddingHorizontal: 15, flexDirection: "row", alignItems: "center", gap: 9 },
   input: { flex: 1, color: BRAND.wine, fontSize: 16 },
   message: { width: "100%", color: BRAND.error, fontSize: 13, lineHeight: 18, marginTop: 12 },
-  primary: { width: "100%", minHeight: 54, borderRadius: 999, backgroundColor: BRAND.primary, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, marginTop: 18 },
+  primary: { width: "100%", minHeight: 54, borderRadius: 999, backgroundColor: BRAND.primary, alignItems: "center", justifyContent: "center", flexDirection: "row", gap: 8, marginTop: 16 },
   disabled: { opacity: 0.65 },
   primaryText: { color: "#FFFFFF", fontSize: 15, fontWeight: "800" },
   forgot: { marginTop: 15, paddingVertical: 7 },
@@ -232,5 +256,5 @@ const styles = StyleSheet.create({
   switch: { marginTop: 12, paddingVertical: 6 },
   switchText: { color: BRAND.muted, fontSize: 14 },
   switchAccent: { color: BRAND.primaryDark, fontWeight: "800" },
-  security: { color: BRAND.muted, fontSize: 11, marginTop: "auto", marginBottom: 24 },
+  security: { color: BRAND.muted, fontSize: 11, textAlign: "center", lineHeight: 16, marginTop: "auto", marginBottom: 24 },
 });

@@ -1,47 +1,49 @@
 # Plan de implementación: EUFORIA Beauty Studio
 
-## Alcance aprobado
+## Alcance acordado
 
-Trasladar selectivamente la app móvil EUFORIA desde `FRYCHICKEN7/euforia-beauty-studio` al nuevo starter móvil gestionado autorizado por la usuaria. Mantener Expo Router, React Native, TypeScript, la navegación y el runtime del starter; preservar el logo y los estilos EUFORIA. La entrega incluye inicio/registro y recuperación con Firebase Authentication, perfiles vinculados al UID, roles seguros, catálogo Firebase, reserva de citas mediante Cloud Functions y visualización de citas en vivo por cliente, administración y personal autorizado. Las cuatro pestañas administrativas son Resumen, Clientes, Avisar y Ajustes. No crear contenido de demostración.
+Continuar el starter móvil Expo Router/React Native/TypeScript existente; preservar identidad visual, Auth y runtime. El administrador puede leer perfiles reales de clientes en el esquema legacy `users/{uid}` y el esquema de app `usuarios/{uid}`, además de crear perfiles de empleado desde cuentas Auth registradas. Cada empleado configura disponibilidad semanal y una casilla independiente de habilitación para citas. El cliente ve servicios con precio/estimación, selecciona un profesional y únicamente horarios que el backend calcula como disponibles. El empleado recibe la solicitud dentro de la app, confirma/rechaza, inicia y termina servicios. Administración consulta duración real promedio y volumen por servicio/profesional.
 
-No desplegar Rules, índices ni Functions a Firebase; no escribir en la base real, cambiar GitHub fuente ni afirmar un APK sin build EAS comprobable. El proyecto gestionado se guarda en el historial/checkpoint Manus del proyecto nuevo. La conexión de configuración Firebase está presente en el entorno gestionado validado, pero no equivale a una prueba de acceso real.
+La captura de cliente define `email`, `id` (UID), `identityNumber`, `name`, `phone`, `profileImage` y rol cliente; perfiles legacy con `role: customer/client` también se reconocen. El esquema de empleado solicitado define `Empleado` (código), `email`, `id` (UID exacto Auth), `name`, `profileImage` y `role: empleado`. No insertar en producción los valores de ejemplo ni crear horarios/servicios/citas ficticias.
+
+El registro público crea siempre un cliente; administración promueve explícitamente y solo mediante Cloud Function después de verificar la cuenta Auth real. La semana inicial sugerida para disponibilidad es 08:00–17:00, corregida por la usuaria; esos defaults no se persisten hasta guardar. Los minutos de servicio se guardan como entero (`90` = 1 h 30 min). El backend ofrece inicios cada 15 minutos en `America/Tegucigalpa`, omite horas pasadas, recesos, intervalos que no caben y solapamientos con citas activas. Todos los bookings seleccionados por profesional quedan pendientes de confirmación del empleado.
+
+No desplegar a Firebase real, no probar haciendo escrituras en producción, no hacer build EAS ni afirmar que existe APK.
 
 ## Arquitectura y responsabilidades
 
-- `app/` mantiene las rutas de acceso, recuperación/cambio de contraseña, redirección por sesión/rol, catálogo y citas del cliente, calendario del empleado y tabs del administrador. Los estados vacíos y errores describen el estado real; no simular reservas ni envíos.
-- `components/` y `constants/` contienen encabezado, controles, iconografía y tokens visuales. `assets/images/` conserva icono, splash, favicon y variantes adaptativas con margen de seguridad.
-- `lib/firebase.ts` inicializa Firebase desde `EXPO_PUBLIC_FIREBASE_*`. `lib/firebase-auth-adapter.ts` y su variante `.native.ts` integran Authentication web/nativo y persistencia; `lib/auth-session.tsx` observa sesión y perfil; `lib/appointments.ts` limita el acceso de UI a catálogo, listeners y funciones callable. Las variables de cliente son configuración pública, no credenciales administrativas.
-- `functions/src/index.ts` es backend TypeScript con Firebase Admin. `reservarCita` obtiene al cliente desde `request.auth.uid`, valida perfil `cliente`, negocio/servicio/profesional activo, modo de negocio, precio/duración y fecha, verifica horas/recesos en `America/Tegucigalpa` y crea la cita transaccionalmente sin solapamiento. `aprobarCita`/`rechazarCita` exigen perfil `admin`/`administrador` o empleado asociado a la cita y transición permitida. Las reservas multiempleado quedan en `hold` 30 minutos; `expirarHolds` las vence por tarea programada.
-- `firestore.rules` deniega por defecto, impide autoasignar roles y escrituras directas inseguras de citas/avisos. Un cliente puede leer su perfil y sus citas; un empleado consulta solo asignaciones propias; el administrador autorizado observa la agenda. Los listeners usan filtros compatibles con las reglas.
-- `firestore.indexes.json` cubre consultas de clientes, agenda, citas por empleado/negocio y expiración temporal. `firebase.json`, `firestore.rules`, índices y Functions quedan entregados para despliegue manual por la propietaria, no desplegados por esta tarea.
-- `README.md` indica variables requeridas, UID/rol admin, estructura de negocio y horarios, pasos de despliegue manual y funciones aún no incluidas. `TODO.md` separa código implementado, verificaciones realizadas y acciones que requieren Firebase real.
+- `app/auth.tsx`, `app/index.tsx`, `lib/auth-session.tsx`: sesión Firebase persistente; leer y conciliar `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`; aliases cliente/admin/empleado, denegar roles contradictorios y alta pública dual de cliente con UID Auth.
+- `app/(tabs)/clients.tsx`, `lib/profiles.ts`: listeners de clientes actuales y legacy; búsqueda y campos reales; selección de una cuenta cliente existente, negocio y código de empleado; promoción por callable y listado del equipo.
+- `app/employee/availability.tsx`: turnos semanales lunes–domingo con valores `HH:mm`, checkbox por día y casilla global “Disponible para citas”; escritura propia autorizada por callable.
+- `app/employee/schedule.tsx`: agenda en vivo para empleado asignado y administración; avisos Firestore, confirmación/rechazo, inicio y final del trabajo.
+- `app/client/catalog.tsx`: servicios reales, duración legible y consulta server-side de empleados/slots por negocio, servicio y fecha; reserva transaccional con refresh si el slot queda ocupado.
+- `app/admin/services.tsx`, `app/(tabs)/index.tsx`: CRUD administrativo de servicios y resumen de citas completadas, promedio real y conteo por empleado/servicio.
+- `lib/roles.ts`, `lib/appointments.ts`, `lib/profiles.ts`: normalización segura de perfiles y roles, listeners, consultas y callables.
+- `functions/src/roles.ts`, `functions/src/availability.ts`, `functions/src/index.ts`: reconciliación Admin SDK de perfiles/roles, cálculo de huecos por fecha, reserva y aprobación transaccionales, avisos in-app, política de disponibilidad, control de citas, tiempos reales y expiración de holds.
+- `firestore.rules`: denegación por defecto, lectura admin/propietario/profesional asignado, creación propia con rol cliente, lectura propia de perfil, catálogo y disponibilidad pública solo por medios aprobados; roles, turnos y estados sensibles no se cambian directamente desde cliente.
+- `firestore.indexes.json`: consultas de conflictos de cita, agendas cliente/empleado/admin, holds que expiran, selector de profesionales disponibles y avisos por destinatario/fecha.
+- `README.md`/`TODO.md`: esquema exacto, pasos Firebase manuales, comprobaciones reales y límites.
 
-## Roles y esquema
+## Esquema y reglas operativas
 
-Los perfiles se guardan en `usuarios/{uid}` con UID igual al de Firebase Authentication, `email`, `rol`, `createdAt`, y nombre/teléfono opcionales. El registro público crea exclusivamente `rol: "cliente"`; no puede establecer `admin`, `administrador`, `empleado` ni permisos. El selector de acceso presenta Cliente, Empleado y Administrador y valida el rol observado. La cuenta administrativa existente es `euforiasalonhn@gmail.com`, UID `r4CMfA2NlNWs7CkcJL6G9nKl6va2`; si falta el documento, la propietaria asigna `rol: "administrador"` o `"admin"` desde un entorno confiable.
+1. Las nuevas cuentas cliente guardan `users/{uid}` y `usuarios/{uid}` con rol `cliente`; perfiles históricos pueden vivir en cualquiera de ambas. `role` y `rol` se leen como aliases, y `customer/client` equivale a cliente. Si las fuentes tienen roles contradictorios, el acceso falla cerrado.
+2. `crearPerfilEmpleado` exige un UID con cuenta habilitada y correo en Firebase Authentication, un perfil cliente, un admin, negocio activo y código único. Escribe los roles sincronizados en `users`/`usuarios`, `empleados/{uid}` y `negocios/{negocioId}/empleados/{uid}` con disponibilidad inicialmente apagada.
+3. El documento profesional vinculado tiene `usuarioId` y copia el UID; dispone `disponibilidad/{0..6}` con `{dia, activo, inicio, fin}`. La casilla global `disponible` controla si se puede seleccionar. El empleado no puede editar el perfil ni calendario de otra persona.
+4. Cada servicio tiene `nombre`, precio numérico, `duracionMin` (5–480) y `activo`. Ejemplo indicado: Corte de Cabello Hombre, L. 120, 90 minutos.
+5. `obtenerDisponibilidad` valida negocio/horario/servicio y cruza el horario del negocio con el del profesional; el resultado no expone registros privados de citas. Devuelve únicamente inicios futuros libres de 15 minutos cuyo servicio quepa completo, sin recesos ni solapamientos con el mismo empleado.
+6. `reservarCita` repite la comprobación en transacción, guarda hold de 30 minutos con datos de cliente/servicio/precio/duración/empleado y crea notificación in-app. El empleado asignado o admin decide; al aprobar pasa a `confirmada`. Cada status sensible valida rol, UID, asignación y estado vigente.
+7. Solo el empleado asignado cambia `confirmada → en_curso → completada`; servidor guarda `startedAt`, `completedAt` y `duracionRealMin`. Admin resume promedios y número de trabajos por empleado/servicio.
 
-El negocio vive en `negocios/{negocioId}` con `modoNegocio`, y subcolecciones `servicios`, `empleados` y `horarios`. No se agregan servicios, precios, personal ni horarios hasta que existan datos reales. Las citas viven en `citas/{citaId}` con `negocioId`, `clienteId`, empleado opcional y UID asociado, servicio, inicio/fin, precio/duración validados, modo, estado y marcas de tiempo. Los estados reconocidos son `hold`, `pendiente_de_aprobacion`, `confirmada`, `en_curso`, `completada`, `cancelada`, `rechazada` y `expirada`. El backend no confía en rol, duración, precio, pertenencia ni UID enviados sin validar.
-
-## Diseño conservado
+## Diseño
 
 - **Movimiento:** boutique de belleza premium con composición editorial, fondo blanco cálido, rosa rubor, vino profundo y acento dorado discreto.
-- **Principios:** lectura rápida, superficies limpias, controles amplios y cómodos con una mano, estados operativos explícitos y datos reales.
-- **Color:** fondo `#FFF5F7`, superficies `#FFFFFF`, acción `#D85C7A`, vino/texto `#5C1A2E`, rosa suave `#FCE8EE` y verde WhatsApp `#25D366`; modo claro y rosado oscuro.
-- **Layout y firma:** header EUFORIA con logo y saludo, tarjetas de bordes suaves, chips tipo píldora, métricas/listas y navegación inferior ligera. Estados vacíos indican cuándo faltan datos reales.
-- **Interacción:** feedback inmediato, errores accionables, protección ante acciones no autorizadas y confirmación de cambios de cita.
-- **Tipografía y voz:** sans serif del sistema, jerarquía en pesos 700–800, controles legibles; tono cálido, premium y directo, con mensajes como “Tu próxima visita empieza aquí”.
-- **Logo:** imagen existente preservada para launcher/splash/favicons sin recortar texto ni rostro y con área segura para máscaras de Android.
-
-## Estructura del proyecto
-
-- `app/`: pantallas Expo Router `auth.tsx`, `index.tsx`, `client/catalog.tsx`, `employee/schedule.tsx`, `(tabs)/index.tsx`, `(tabs)/clients.tsx`, `(tabs)/notify.tsx`, `(tabs)/settings.tsx` y `change-password.tsx`.
-- `components/`: `app-header`, `auth-gate`, botones, tarjetas y avisos compartidos.
-- `constants/`: `brand.ts` y tokens de tema.
-- `lib/`: Firebase, adaptadores Auth nativo/web, proveedor de sesión, repositorios Firestore/Functions y formato de lempira.
-- `functions/`: Functions callable y programada en TypeScript con Firebase Admin.
-- `assets/images/`: logo e iconografía; `firebase.json`, `firestore.rules` e `firestore.indexes.json`: configuración Firebase a desplegar externamente.
-- `README.md`, `TODO.md`, `plan.md`: instrucciones y registro de estado.
+- **Principios:** lectura rápida, superficies limpias, controles amplios de uso con una mano, datos reales y estados operativos explícitos.
+- **Color:** fondo `#FFF5F7`, superficies `#FFFFFF`, acción `#D85C7A`, vino `#5C1A2E`, rosa suave `#FCE8EE` y verde de acento; modos claro y rosado oscuro.
+- **Layout y firma:** encabezado EUFORIA, tarjetas suaves, botones/píldoras accesibles, métricas y listas; estados vacíos aclaran la configuración faltante.
+- **Interacción:** feedback inmediato, mensajes accionables, acciones privilegiadas confirmadas por servidor, refresh al fallar un slot ocupado.
+- **Tipografía/voz:** sans serif del sistema, pesos 700–800, tono cálido, premium y directo.
+- **Logo:** recurso existente preservado para launcher/splash y metadata con área segura.
 
 ## Entorno y validación
 
-Mantener los listeners fijos del starter en Expo/Metro `8081` y API `3000`. Evitar escrituras de prueba en la base compartida. En el entorno gestionado terminaron correctamente `pnpm check`, `pnpm lint`, build TypeScript de Functions y compilación local de reglas con el emulador Firestore; `pnpm db:push` indicó que no había cambios de esquema. Metro respondió `200` y `/status` informó que el packager estaba activo; el API escuchó en su puerto. No se probaron credenciales contra Firebase real. Las rules y functions deben desplegarse manualmente, y la primera prueba real requiere perfil admin, datos/horarios y una revisión del proyecto `euforia-e76a6`. Un APK se considera inexistente hasta completar un build EAS real.
+Mantener Expo/Metro en 8081 y API del starter en 3000; no reemplazar el starter. Validar TypeScript, lint, pruebas unitarias de slots/roles, build de Functions, sintaxis Rules con emulador local y bundle Android Expo. La base administrada y Firebase producción son compartidos: no escribir datos al probar. Un agente revisor de solo lectura traza UI, Rules, Functions y requisitos antes del checkpoint. Guardar en `main` remoto canónico Manus; no desplegar Firebase ni publicar sin autorización.

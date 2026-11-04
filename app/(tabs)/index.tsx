@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
-import { CalendarDays, Clock3, TrendingUp, UsersRound } from "lucide-react-native";
+import { CalendarDays, Clock3, Scissors, TrendingUp, UsersRound } from "lucide-react-native";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
@@ -54,12 +54,23 @@ function SummaryContent() {
     .sort((a, b) => (appointmentMillis(a.inicio) ?? 0) - (appointmentMillis(b.inicio) ?? 0)), [appointments, now]);
   const pendingCount = appointments.filter((item) => ["hold", "pendiente_de_aprobacion"].includes(item.estado)).length;
   const completedRevenue = appointments.filter((item) => item.estado === "completada").reduce((total, item) => total + (Number(item.precio) || 0), 0);
+  const performance = useMemo(() => {
+    const groups = new Map<string, { employee: string; service: string; count: number; actualTotal: number; estimated: number }>();
+    appointments.filter((item) => item.estado === "completada" && Number(item.duracionRealMin) > 0).forEach((item) => {
+      const key = `${item.empleadoUid ?? item.empleadoId ?? item.empleadoNombre ?? "sin-empleado"}:${item.servicioId}`;
+      const row = groups.get(key) ?? { employee: String(item.empleadoNombre ?? "Empleado"), service: String(item.servicioNombre ?? "Servicio"), count: 0, actualTotal: 0, estimated: Number(item.duracionMin) || 0 };
+      row.count += 1;
+      row.actualTotal += Number(item.duracionRealMin);
+      groups.set(key, row);
+    });
+    return [...groups.values()].sort((a, b) => b.count - a.count).slice(0, 6);
+  }, [appointments]);
 
   return (
     <AuthGate allowedRoles={["admin", "administrador"]}>
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-          <AppHeader name={String(profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
+          <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
           <View style={styles.hero}>
             <View><Text style={styles.eyebrow}>RESUMEN DE TU ESTUDIO</Text><Text style={styles.headline}>Todo bajo control,</Text><Text style={styles.headlineAccent}>un día a la vez.</Text></View>
             <View style={styles.datePill}><CalendarDays size={15} color={BRAND.primary} /><Text style={styles.dateText}>{now ? new Date(now).toLocaleDateString("es-HN", { timeZone: "America/Tegucigalpa", day: "numeric", month: "short" }) : "—"}</Text></View>
@@ -74,8 +85,9 @@ function SummaryContent() {
           </View>
           <View style={styles.sectionRow}><Text style={styles.sectionTitle}>Próximas citas</Text><Pressable onPress={() => router.push("/employee/schedule")}><Text style={styles.link}>Ver agenda</Text></Pressable></View>
           {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Actualizando en tiempo real…</Text></View> : error ? <View style={styles.state}><Text style={styles.errorText}>No se pudo leer la agenda: {error}</Text><Text style={styles.stateText}>Comprueba reglas e índices de Firestore.</Text></View> : upcoming.length === 0 ? <Empty icon={<Clock3 size={23} color={BRAND.primary} />} title="No hay citas próximas" text="Las solicitudes reales aparecerán aquí cuando un cliente reserve." /> : upcoming.slice(0, 5).map((item) => <AppointmentTile key={item.id} item={item} />)}
-          <View style={styles.sectionRow}><Text style={styles.sectionTitle}>Para avisar hoy</Text><Pressable onPress={() => router.push("/(tabs)/notify")}><Text style={styles.link}>Ver avisos</Text></Pressable></View>
-          <Empty icon={<UsersRound size={22} color={BRAND.primary} />} title="Lista de avisos conectada próximamente" text="No se inventan nombres ni recordatorios hasta conectar los perfiles y las preferencias reales." />
+          <Pressable accessibilityRole="button" onPress={() => router.push("../admin/services")} style={styles.serviceManager}><View style={styles.serviceIcon}><Scissors size={19} color={BRAND.primaryDark} /></View><View style={{ flex: 1 }}><Text style={styles.serviceManagerTitle}>Servicios y tiempos estimados</Text><Text style={styles.serviceManagerHint}>Configura precio y duración para calcular la disponibilidad</Text></View><Text style={styles.link}>Abrir</Text></Pressable>
+          <View style={styles.sectionRow}><Text style={styles.sectionTitle}>Rendimiento del equipo</Text><Text style={styles.period}>Citas completadas · 30 días</Text></View>
+          {performance.length === 0 ? <Empty icon={<TrendingUp size={22} color={BRAND.primary} />} title="Aún no hay tiempos reales" text="Cuando un empleado inicie y finalice un servicio, aquí verás los minutos reales por empleado y tipo de trabajo." /> : performance.map((item) => <View key={`${item.employee}:${item.service}`} style={styles.performanceCard}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.performanceName}>{item.employee}</Text><Text numberOfLines={1} style={styles.performanceService}>{item.service}</Text></View><View style={styles.performanceNumbers}><Text style={styles.performanceAverage}>{formatMinutes(item.actualTotal / item.count)}</Text><Text style={styles.performanceDetail}>promedio real · {item.count} trabajo{item.count === 1 ? "" : "s"}</Text>{item.estimated > 0 ? <Text style={styles.performanceDetail}>Estimado: {formatMinutes(item.estimated)}</Text> : null}</View></View>)}
         </ScrollView>
       </ScreenContainer>
     </AuthGate>
@@ -93,6 +105,7 @@ function AppointmentTile({ item }: { item: AppointmentRecord }) {
   const client = String(item.clienteNombre || item.clienteEmail || "Cliente");
   return <View style={styles.appointment}><View style={styles.appointmentTop}><Text numberOfLines={1} style={styles.client}>{client}</Text><Text style={styles.status}>{item.estado.replaceAll("_", " ")}</Text></View><Text style={styles.service}>{String(item.servicioNombre ?? "Servicio")}{item.empleadoNombre ? ` · ${String(item.empleadoNombre)}` : ""}</Text><Text style={styles.date}>{when}</Text></View>;
 }
+function formatMinutes(value: number) { const total = Math.round(value); const hours = Math.floor(total / 60); const minutes = total % 60; return hours > 0 ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${minutes} min`; }
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {
   return <View style={styles.empty}>{icon}<Text style={styles.emptyTitle}>{title}</Text><Text style={styles.emptyText}>{text}</Text></View>;
 }
@@ -126,4 +139,7 @@ const styles = StyleSheet.create({
   status: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, overflow: "hidden", borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, fontSize: 10, fontWeight: "800" },
   service: { color: BRAND.wine, fontSize: 12, marginTop: 5 },
   date: { color: BRAND.muted, fontSize: 11, marginTop: 4, textTransform: "capitalize" },
+  serviceManager: { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 20, marginTop: 20, padding: 13, borderRadius: 18, backgroundColor: BRAND.softPink },
+  serviceIcon: { width: 37, height: 37, borderRadius: 13, backgroundColor: BRAND.surface, alignItems: "center", justifyContent: "center" }, serviceManagerTitle: { color: BRAND.wine, fontSize: 12, fontWeight: "800" }, serviceManagerHint: { color: BRAND.muted, fontSize: 10, lineHeight: 14, marginTop: 3 }, period: { color: BRAND.muted, fontSize: 9 },
+  performanceCard: { flexDirection: "row", alignItems: "center", gap: 10, marginHorizontal: 20, marginBottom: 8, padding: 13, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border, borderRadius: 17 }, performanceName: { color: BRAND.wine, fontSize: 12, fontWeight: "800" }, performanceService: { color: BRAND.muted, fontSize: 10, marginTop: 3 }, performanceNumbers: { alignItems: "flex-end" }, performanceAverage: { color: BRAND.primaryDark, fontSize: 14, fontWeight: "800" }, performanceDetail: { color: BRAND.muted, fontSize: 9, marginTop: 2 },
 });

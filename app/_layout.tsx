@@ -58,6 +58,8 @@ export default function RootLayout() {
               <Stack.Screen name="(tabs)" />
               <Stack.Screen name="client/catalog" />
               <Stack.Screen name="employee/schedule" />
+              <Stack.Screen name="employee/availability" />
+              <Stack.Screen name="admin/services" />
               <Stack.Screen name="change-password" />
               <Stack.Screen name="oauth/callback" />
             </Stack>

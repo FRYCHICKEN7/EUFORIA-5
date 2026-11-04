@@ -1,17 +1,34 @@
 import { getApp, getApps, initializeApp } from "firebase-admin/app";
-import { getFirestore, Timestamp, type DocumentData } from "firebase-admin/firestore";
+import { getAuth } from "firebase-admin/auth";
+import { FieldValue, getFirestore, Timestamp, type DocumentData, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/https";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+import {
+  computeAvailableSlots,
+  hondurasDayBounds,
+  parseClock,
+  parseLocalDate,
+  type AppointmentInterval,
+  type TimeBreak,
+} from "./availability";
+import { mergeProfileDocuments, roleFromProfiles } from "./roles";
 
 const app = getApps().length ? getApp() : initializeApp();
 const db = getFirestore(app);
 const ACTIVE_STATES = new Set(["hold", "pendiente_de_aprobacion", "confirmada", "en_curso"]);
 const MAX_BOOKING_MINUTES = 8 * 60;
-const OVERLAP_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 const HOLD_DURATION_MS = 30 * 60 * 1000;
+const HONDURAS_TIME_ZONE = "America/Tegucigalpa";
+const PROFILE_COLLECTIONS = ["users", "empleados", "usuarios"] as const;
 
-type ReserveInput = { negocioId: string; servicioId: string; inicio: string; empleadoId?: string; notas?: string };
+type ReserveInput = { negocioId: string; servicioId: string; inicio: string; empleadoId: string; notas?: string };
 type DecisionInput = { citaId: string; notas?: string };
+type AvailabilityRequest = { negocioId: string; servicioId: string; fecha: string };
+type PromoteEmployeeInput = { uid: string; negocioId: string; Empleado: string };
+type EmployeeAvailabilityInput = {
+  disponible: boolean;
+  dias: Array<{ dia: number; activo: boolean; inicio?: string; fin?: string }>;
+};
 
 function requiredString(value: unknown, label: string, maxLength = 160): string {
   if (typeof value !== "string" || !value.trim() || value.trim().length > maxLength) {
@@ -20,82 +37,52 @@ function requiredString(value: unknown, label: string, maxLength = 160): string 
   return value.trim();
 }
 
-function roleFrom(profile: DocumentData): string {
-  const normalize = (value: unknown) => {
-    if (typeof value !== "string") return "";
-    const role = value.trim().toLowerCase();
-    return role === "admin" || role === "administrador" ? "admin" : role;
-  };
-  const primary = normalize(profile.rol);
-  const legacy = normalize(profile.role);
-  if (primary && legacy && primary !== legacy) return "";
-  return primary || legacy;
+function optionalNote(value: unknown) {
+  return typeof value === "string" ? value.trim().slice(0, 500) : "";
 }
 
-function canManage(role: string, uid: string, appointment: DocumentData): boolean {
-  if (role === "admin") return true;
-  return role === "empleado" && (appointment.empleadoUid === uid || appointment.empleadoId === uid);
+function roleFrom(profile: DocumentData | null | undefined) {
+  return roleFromProfiles(profile ? [profile] : []);
 }
 
-const BUSINESS_TIME_ZONE = "America/Tegucigalpa";
+function profileRefs(uid: string) {
+  return PROFILE_COLLECTIONS.map((collectionName) => db.collection(collectionName).doc(uid));
+}
 
-function localClock(millis: number) {
-  const date = new Date(millis);
-  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: BUSINESS_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+async function loadProfile(uid: string) {
+  const snapshots = await Promise.all(profileRefs(uid).map((reference) => reference.get()));
+  const sources = snapshots.map((snapshot) => snapshot.exists ? snapshot.data() ?? {} : null);
+  const profile = mergeProfileDocuments(sources, uid);
+  return { profile, role: roleFromProfiles(sources), snapshots };
+}
+
+async function loadProfileInTransaction(transaction: Transaction, uid: string) {
+  const refs = profileRefs(uid);
+  const snapshots = await Promise.all(refs.map((reference) => transaction.get(reference)));
+  const sources = snapshots.map((snapshot) => snapshot.exists ? snapshot.data() ?? {} : null);
+  const profile = mergeProfileDocuments(sources, uid);
+  return { profile, role: roleFromProfiles(sources), refs, snapshots, sources };
+}
+
+function clockAndDate(millis: number) {
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: HONDURAS_TIME_ZONE,
+    year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(millis));
   const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
   return {
     date: `${values.year}-${values.month}-${values.day}`,
-    minutes: Number(values.hour) * 60 + Number(values.minute),
-    weekday: new Intl.DateTimeFormat("en-US", { timeZone: BUSINESS_TIME_ZONE, weekday: "short" }).format(date).toLowerCase(),
+    minuteOfDay: Number(values.hour) * 60 + Number(values.minute),
   };
-}
-
-function scheduleDocumentId(millis: number): string {
-  const dayIds: Record<string, string> = { sun: "0", mon: "1", tue: "2", wed: "3", thu: "4", fri: "5", sat: "6" };
-  const id = dayIds[localClock(millis).weekday];
-  if (id === undefined) throw new HttpsError("internal", "No se pudo determinar el día de la cita.");
-  return id;
-}
-
-function clockToMinutes(value: unknown): number | null {
-  if (typeof value !== "string") return null;
-  const match = /^(?:[01]\d|2[0-3]):[0-5]\d$/.exec(value);
-  if (!match) return null;
-  const [hours, minutes] = value.split(":").map(Number);
-  return hours * 60 + minutes;
-}
-
-function assertWithinBusinessHours(hours: DocumentData | undefined, startMs: number, endMs: number) {
-  if (!hours || hours.activo !== true) {
-    throw new HttpsError("failed-precondition", "El negocio aún no tiene ese día habilitado en sus horarios de atención.");
-  }
-  const start = localClock(startMs);
-  const end = localClock(endMs);
-  if (start.date !== end.date) throw new HttpsError("failed-precondition", "La cita debe terminar el mismo día local.");
-  const opening = clockToMinutes(hours.apertura);
-  const closing = clockToMinutes(hours.cierre);
-  if (opening === null || closing === null || closing <= opening) {
-    throw new HttpsError("failed-precondition", "El horario del negocio debe tener apertura y cierre válidos en formato HH:MM.");
-  }
-  if (start.minutes < opening || end.minutes > closing) {
-    throw new HttpsError("failed-precondition", "La cita queda fuera del horario de atención.");
-  }
-  const breaks = hours.recesos ?? [];
-  if (!Array.isArray(breaks)) throw new HttpsError("failed-precondition", "Los recesos configurados no son válidos.");
-  for (const pause of breaks) {
-    const pauseStart = clockToMinutes(pause?.inicio);
-    const pauseEnd = clockToMinutes(pause?.fin);
-    if (pauseStart === null || pauseEnd === null || pauseEnd <= pauseStart) {
-      throw new HttpsError("failed-precondition", "Cada receso debe tener inicio y fin HH:MM válidos.");
-    }
-    if (start.minutes < pauseEnd && end.minutes > pauseStart) {
-      throw new HttpsError("failed-precondition", "La cita se cruza con un receso del negocio.");
-    }
-  }
 }
 
 function timestampMillis(value: unknown): number | null {
   if (value instanceof Timestamp) return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "string") {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
   if (value && typeof value === "object" && "toMillis" in value && typeof value.toMillis === "function") {
     const millis = (value as { toMillis: () => number }).toMillis();
     return Number.isFinite(millis) ? millis : null;
@@ -103,165 +90,511 @@ function timestampMillis(value: unknown): number | null {
   return null;
 }
 
-async function decideAppointment(request: CallableRequest<DecisionInput>, nextState: "confirmada" | "rechazada") {
-  const uid = request.auth?.uid;
-  if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
-  const citaId = requiredString(request.data?.citaId, "Identificador de cita", 128);
-  const note = typeof request.data?.notas === "string" ? request.data.notas.trim().slice(0, 500) : "";
-  const appointmentRef = db.collection("citas").doc(citaId);
-  const profileRef = db.collection("usuarios").doc(uid);
+function validService(service: DocumentData | undefined) {
+  if (!service || service.activo !== true) throw new HttpsError("failed-precondition", "El servicio no está activo en Firebase.");
+  const duration = Number(service.duracionMin);
+  const price = typeof service.precio === "number" ? service.precio : Number(service.precio);
+  if (!Number.isInteger(duration) || duration < 5 || duration > MAX_BOOKING_MINUTES) {
+    throw new HttpsError("failed-precondition", "Configura la duración del servicio en duracionMin (5–480 minutos).");
+  }
+  if (!Number.isFinite(price) || price < 0) {
+    throw new HttpsError("failed-precondition", "El servicio requiere un precio numérico válido.");
+  }
+  return { duration, price };
+}
+
+function validBusinessMode(business: DocumentData) {
+  const mode = business.modoNegocio;
+  if (mode !== "unipersonal" && mode !== "multiEmpleado") {
+    throw new HttpsError("failed-precondition", "Configura modoNegocio como unipersonal o multiEmpleado antes de habilitar citas.");
+  }
+  return mode;
+}
+
+function scheduleDayId(date: string) {
+  const parsed = parseLocalDate(date);
+  if (!parsed) throw new HttpsError("invalid-argument", "Usa una fecha válida en formato AAAA-MM-DD.");
+  return String(parsed.weekday);
+}
+
+function validateBusinessHours(hours: DocumentData | undefined) {
+  if (!hours || hours.activo !== true) return null;
+  const opening = parseClock(hours.apertura);
+  const closing = parseClock(hours.cierre);
+  if (opening === null || closing === null || closing <= opening) {
+    throw new HttpsError("failed-precondition", "El horario del negocio debe tener apertura/cierre válidos en formato HH:MM.");
+  }
+  const breaks: TimeBreak[] = hours.recesos === undefined ? [] : hours.recesos;
+  if (!Array.isArray(breaks)) throw new HttpsError("failed-precondition", "Los recesos del negocio no tienen un formato válido.");
+  for (const pause of breaks) {
+    const start = parseClock(pause?.inicio);
+    const end = parseClock(pause?.fin);
+    if (start === null || end === null || end <= start) {
+      throw new HttpsError("failed-precondition", "Cada receso debe tener inicio y fin HH:MM válidos.");
+    }
+  }
+  return { opening: String(hours.apertura), closing: String(hours.cierre), breaks };
+}
+
+function activeAppointmentIntervals(snapshot: { docs: Array<{ data: () => DocumentData }> }, nowMs: number): AppointmentInterval[] {
+  return snapshot.docs.flatMap((item) => {
+    const appointment = item.data();
+    if (!ACTIVE_STATES.has(String(appointment.estado))) return [];
+    const holdExpiresAtMs = timestampMillis(appointment.holdExpiresAt);
+    if (appointment.estado === "hold" && holdExpiresAtMs !== null && holdExpiresAtMs <= nowMs) return [];
+    const inicioMs = timestampMillis(appointment.inicio);
+    const storedEnd = timestampMillis(appointment.fin);
+    const duration = Number(appointment.duracionMin);
+    const finMs = storedEnd ?? (inicioMs !== null && Number.isFinite(duration) ? inicioMs + duration * 60_000 : null);
+    if (inicioMs === null || finMs === null || finMs <= inicioMs) return [];
+    return [{ estado: String(appointment.estado), inicioMs, finMs, holdExpiresAtMs }];
+  });
+}
+
+async function appointmentIntervals(
+  transaction: Transaction | null,
+  negocioId: string,
+  empleadoId: string,
+  date: string,
+  nowMs: number,
+) {
+  const bounds = hondurasDayBounds(date);
+  if (!bounds) throw new HttpsError("invalid-argument", "La fecha local no es válida.");
+  const query = db.collection("citas")
+    .where("negocioId", "==", negocioId)
+    .where("empleadoId", "==", empleadoId)
+    .where("inicio", ">=", Timestamp.fromMillis(bounds.startMs - MAX_BOOKING_MINUTES * 60_000))
+    .where("inicio", "<", Timestamp.fromMillis(bounds.endMs));
+  const snapshot = transaction ? await transaction.get(query) : await query.limit(500).get();
+  return activeAppointmentIntervals(snapshot, nowMs);
+}
+
+function computeSlots(
+  date: string,
+  nowMs: number,
+  duration: number,
+  hours: { opening: string; closing: string; breaks: TimeBreak[] },
+  employeeSchedule: DocumentData,
+  appointments: AppointmentInterval[],
+) {
+  if (employeeSchedule.activo !== true) return [];
+  const employeeStart = parseClock(employeeSchedule.inicio);
+  const employeeEnd = parseClock(employeeSchedule.fin);
+  if (employeeStart === null || employeeEnd === null || employeeEnd <= employeeStart) return [];
+  return computeAvailableSlots({
+    date,
+    nowMs,
+    serviceDurationMin: duration,
+    opening: hours.opening,
+    closing: hours.closing,
+    businessBreaks: hours.breaks,
+    employeeStart: String(employeeSchedule.inicio),
+    employeeEnd: String(employeeSchedule.fin),
+    appointments,
+    slotStepMin: 15,
+  });
+}
+
+function validateRequestedInstant(raw: string) {
+  const date = new Date(raw);
+  const millis = date.getTime();
+  if (!Number.isFinite(millis) || date.toISOString() !== raw) {
+    throw new HttpsError("invalid-argument", "La fecha y hora deben enviarse en formato ISO válido.");
+  }
+  if (millis > Date.now() + 365 * 24 * 60 * 60 * 1000) {
+    throw new HttpsError("invalid-argument", "La fecha excede el plazo de reserva permitido.");
+  }
+  const local = clockAndDate(millis);
+  const dateParts = parseLocalDate(local.date);
+  if (!dateParts) throw new HttpsError("invalid-argument", "No se pudo calcular la fecha local de Honduras.");
+  if (local.minuteOfDay % 15 !== 0) throw new HttpsError("invalid-argument", "Los inicios deben estar alineados a intervalos de 15 minutos.");
+  return { millis, date: local.date, weekday: dateParts.weekday };
+}
+
+function publicEmployeeQuery(businessRef: FirebaseFirestore.DocumentReference) {
+  return businessRef.collection("empleados")
+    .where("activo", "==", true)
+    .where("publica", "==", true)
+    .where("disponible", "==", true)
+    .limit(100);
+}
+
+export const crearPerfilEmpleado = onCall<PromoteEmployeeInput>(async (request) => {
+  const adminUid = request.auth?.uid;
+  if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión como administrador.");
+  const uid = requiredString(request.data?.uid, "UID de Authentication", 128);
+  const negocioId = requiredString(request.data?.negocioId, "Negocio", 128);
+  const employeeCode = requiredString(request.data?.Empleado, "Código de empleado", 30);
+  if (!/^[A-Za-z0-9_-]+$/.test(employeeCode)) throw new HttpsError("invalid-argument", "El código de empleado solo puede incluir letras, números, guion y guion bajo.");
+  const authUser = await getAuth(app).getUser(uid).catch((error: unknown) => {
+    const code = (error as { code?: string })?.code;
+    if (code === "auth/user-not-found") throw new HttpsError("failed-precondition", "La persona debe registrarse primero con ese UID en Firebase Authentication.");
+    throw new HttpsError("internal", "No se pudo verificar la cuenta de Firebase Authentication.");
+  });
+  if (authUser.disabled || !authUser.email) throw new HttpsError("failed-precondition", "La cuenta debe estar habilitada y tener correo en Firebase Authentication.");
+  const authEmail = authUser.email.trim();
+
+  const businessRef = db.collection("negocios").doc(negocioId);
+  const employeeProfileRef = db.collection("empleados").doc(uid);
+  const businessEmployeeRef = businessRef.collection("empleados").doc(uid);
+  const duplicateQuery = db.collection("empleados").where("Empleado", "==", employeeCode).limit(2);
+  const now = Timestamp.now();
+
   await db.runTransaction(async (transaction) => {
-    const profileSnapshot = await transaction.get(profileRef);
-    const appointmentSnapshot = await transaction.get(appointmentRef);
-    if (!profileSnapshot.exists) throw new HttpsError("permission-denied", "No existe un perfil autorizado.");
-    if (!appointmentSnapshot.exists) throw new HttpsError("not-found", "La cita no existe.");
-    const role = roleFrom(profileSnapshot.data() ?? {});
-    const appointment = appointmentSnapshot.data() ?? {};
-    if (!canManage(role, uid, appointment)) throw new HttpsError("permission-denied", "No tienes permiso para decidir esta cita.");
-    if (!["hold", "pendiente_de_aprobacion"].includes(String(appointment.estado))) {
-      throw new HttpsError("failed-precondition", "La cita ya no está pendiente de decisión.");
-    }
-    const holdEnd = timestampMillis(appointment.holdExpiresAt);
-    if (appointment.estado === "hold" && holdEnd !== null && holdEnd <= Date.now()) {
-      throw new HttpsError("deadline-exceeded", "La reserva temporal ya venció.");
-    }
-    transaction.update(appointmentRef, {
-      estado: nextState,
-      decisionPor: uid,
-      decisionAt: Timestamp.now(),
-      ...(nextState === "rechazada" && note ? { notasDecision: note } : {}),
+    const [admin, customer, businessSnapshot, alreadyEmployee, duplicateCodes] = await Promise.all([
+      loadProfileInTransaction(transaction, adminUid),
+      loadProfileInTransaction(transaction, uid),
+      transaction.get(businessRef),
+      transaction.get(employeeProfileRef),
+      transaction.get(duplicateQuery),
+    ]);
+    if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "Solo administración puede crear perfiles de empleado.");
+    if (!customer.profile || customer.role !== "cliente") throw new HttpsError("failed-precondition", "Primero la persona debe registrarse o tener un perfil cliente con el mismo UID.");
+    if (!businessSnapshot.exists || businessSnapshot.data()?.activo !== true) throw new HttpsError("failed-precondition", "Selecciona un negocio activo.");
+    validBusinessMode(businessSnapshot.data() ?? {});
+    if (alreadyEmployee.exists) throw new HttpsError("already-exists", "Esta cuenta ya tiene un perfil de empleado.");
+    if (duplicateCodes.docs.some((item) => item.id !== uid)) throw new HttpsError("already-exists", "Ese código de empleado ya está asignado.");
+
+    const source = customer.profile;
+    const email = authEmail;
+    const name = String(source.name ?? source.displayName ?? source.nombre ?? "").trim();
+    if (!email || name.length < 2) throw new HttpsError("failed-precondition", "El perfil cliente necesita correo y nombre antes de activarse como empleado.");
+    const profileImage = String(source.profileImage ?? source.photoURL ?? "");
+    const employeeProfile: DocumentData = {
+      Empleado: employeeCode,
+      email,
+      id: uid,
+      name,
+      displayName: name,
+      profileImage,
+      role: "empleado",
+      rol: "empleado",
+      negocioId,
+      activo: true,
+      publica: true,
+      disponible: false,
+      createdAt: now,
+      updatedAt: now,
+    };
+    const appProfile = {
+      ...source,
+      id: uid,
+      email,
+      name,
+      displayName: name,
+      role: "empleado",
+      rol: "empleado",
+      negocioId,
+      updatedAt: now,
+    };
+    // Normalize both user collections so the Auth listener and legacy readers agree.
+    transaction.set(db.collection("users").doc(uid), appProfile, { merge: true });
+    transaction.set(db.collection("usuarios").doc(uid), appProfile, { merge: true });
+    transaction.set(employeeProfileRef, employeeProfile);
+    transaction.set(businessEmployeeRef, {
+      ...employeeProfile,
+      usuarioId: uid,
+      uid,
+      nombre: name,
+      createdAt: now,
     });
   });
-  return { ok: true as const };
-}
+  return { ok: true as const, empleadoId: uid, codigo: employeeCode };
+});
+
+export const guardarDisponibilidadEmpleado = onCall<EmployeeAvailabilityInput>(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Inicia sesión con el perfil empleado.");
+  const desiredAvailable = request.data?.disponible;
+  const days = request.data?.dias;
+  if (typeof desiredAvailable !== "boolean" || !Array.isArray(days) || days.length !== 7) {
+    throw new HttpsError("invalid-argument", "Envía la casilla Disponible y los siete días de la semana.");
+  }
+  const normalizedDays = new Map<number, { dia: number; activo: boolean; inicio: string; fin: string }>();
+  for (const item of days) {
+    if (!Number.isInteger(item?.dia) || item.dia < 0 || item.dia > 6 || typeof item.activo !== "boolean" || normalizedDays.has(item.dia)) {
+      throw new HttpsError("invalid-argument", "Cada día debe ser único, entre 0 y 6, y tener activo booleano.");
+    }
+    const inicio = typeof item.inicio === "string" ? item.inicio : "";
+    const fin = typeof item.fin === "string" ? item.fin : "";
+    if (item.activo) {
+      const start = parseClock(inicio);
+      const end = parseClock(fin);
+      if (start === null || end === null || end <= start) throw new HttpsError("invalid-argument", "El turno activo debe tener horas válidas HH:MM y terminar después de iniciar el mismo día.");
+    }
+    normalizedDays.set(item.dia, { dia: item.dia, activo: item.activo, inicio: inicio || "08:00", fin: fin || "17:00" });
+  }
+  if (normalizedDays.size !== 7) throw new HttpsError("invalid-argument", "Se requieren los siete días de la semana.");
+  if (desiredAvailable && ![...normalizedDays.values()].some((day) => day.activo)) {
+    throw new HttpsError("failed-precondition", "Activa al menos un día de turno antes de marcarte disponible.");
+  }
+
+  const now = Timestamp.now();
+  await db.runTransaction(async (transaction) => {
+    const profile = await loadProfileInTransaction(transaction, uid);
+    const employeeSnapshot = await transaction.get(db.collection("empleados").doc(uid));
+    if (!profile.profile || profile.role !== "empleado" || !employeeSnapshot.exists) {
+      throw new HttpsError("permission-denied", "Solo un empleado activo puede cambiar su disponibilidad.");
+    }
+    const employee = employeeSnapshot.data() ?? {};
+    const negocioId = requiredString(employee.negocioId, "Negocio asignado", 128);
+    const businessEmployeeRef = db.collection("negocios").doc(negocioId).collection("empleados").doc(uid);
+    const businessEmployee = await transaction.get(businessEmployeeRef);
+    if (!businessEmployee.exists || businessEmployee.data()?.usuarioId !== uid || businessEmployee.data()?.activo !== true) {
+      throw new HttpsError("permission-denied", "El perfil operativo de empleado no está activo para este negocio.");
+    }
+    for (const day of normalizedDays.values()) {
+      transaction.set(businessEmployeeRef.collection("disponibilidad").doc(String(day.dia)), { ...day, updatedAt: now });
+    }
+    transaction.update(businessEmployeeRef, { disponible: desiredAvailable, updatedAt: now });
+    transaction.update(db.collection("empleados").doc(uid), { disponible: desiredAvailable, updatedAt: now });
+  });
+  return { ok: true as const, disponible: desiredAvailable };
+});
+
+export const obtenerDisponibilidad = onCall<AvailabilityRequest>(async (request) => {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Inicia sesión para consultar horarios disponibles.");
+  const customer = await loadProfile(uid);
+  if (!customer.profile || customer.role !== "cliente") throw new HttpsError("permission-denied", "Solo un perfil cliente puede consultar disponibilidad.");
+  const negocioId = requiredString(request.data?.negocioId, "Negocio", 128);
+  const servicioId = requiredString(request.data?.servicioId, "Servicio", 128);
+  const fecha = requiredString(request.data?.fecha, "Fecha", 10);
+  const day = parseLocalDate(fecha);
+  if (!day) throw new HttpsError("invalid-argument", "La fecha debe ser válida y usar AAAA-MM-DD.");
+  const today = clockAndDate(Date.now()).date;
+  if (fecha < today) throw new HttpsError("invalid-argument", "No se pueden consultar fechas que ya pasaron.");
+  const todayUtc = Date.parse(`${today}T00:00:00Z`);
+  const requestedUtc = Date.parse(`${fecha}T00:00:00Z`);
+  if (requestedUtc - todayUtc > 365 * 24 * 60 * 60 * 1000) throw new HttpsError("invalid-argument", "La fecha excede el plazo de disponibilidad permitido.");
+
+  const businessRef = db.collection("negocios").doc(negocioId);
+  const serviceRef = businessRef.collection("servicios").doc(servicioId);
+  const [businessSnapshot, serviceSnapshot, hoursSnapshot] = await Promise.all([
+    businessRef.get(), serviceRef.get(), businessRef.collection("horarios").doc(String(day.weekday)).get(),
+  ]);
+  if (!businessSnapshot.exists || businessSnapshot.data()?.activo !== true) throw new HttpsError("not-found", "El negocio no está activo.");
+  if (!serviceSnapshot.exists) throw new HttpsError("not-found", "El servicio no existe.");
+  const business = businessSnapshot.data() ?? {};
+  validBusinessMode(business);
+  const { duration, price } = validService(serviceSnapshot.data());
+  const hours = validateBusinessHours(hoursSnapshot.data());
+  const service = { id: servicioId, nombre: String(serviceSnapshot.data()?.nombre ?? "Servicio"), precio: price, duracionMin: duration };
+  if (!hours) return { fecha, servicio: service, empleados: [] };
+
+  const staff = await publicEmployeeQuery(businessRef).get();
+  const nowMs = Date.now();
+  const employees = await Promise.all(staff.docs.map(async (employeeSnapshot) => {
+    const employee = employeeSnapshot.data();
+    const employeeUid = String(employee.usuarioId ?? employee.uid ?? employeeSnapshot.id);
+    if (!employeeUid) return null;
+    const [weeklySchedule, appointments] = await Promise.all([
+      employeeSnapshot.ref.collection("disponibilidad").doc(String(day.weekday)).get(),
+      appointmentIntervals(null, negocioId, employeeSnapshot.id, fecha, nowMs),
+    ]);
+    if (!weeklySchedule.exists) return null;
+    const slots = computeSlots(fecha, nowMs, duration, hours, weeklySchedule.data() ?? {}, appointments);
+    if (slots.length === 0) return null;
+    return {
+      id: employeeSnapshot.id,
+      uid: employeeUid,
+      Empleado: String(employee.Empleado ?? ""),
+      nombre: String(employee.name ?? employee.nombre ?? "Profesional"),
+      profileImage: typeof employee.profileImage === "string" ? employee.profileImage : "",
+      slots: slots.map((slot) => ({ hora: slot.hora, inicio: new Date(slot.inicioMs).toISOString() })),
+    };
+  }));
+  return { fecha, servicio: service, empleados: employees.filter((employee): employee is NonNullable<typeof employee> => Boolean(employee)) };
+});
 
 export const reservarCita = onCall<ReserveInput>(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión para reservar.");
-  const negocioId = requiredString(request.data?.negocioId, "Negocio");
-  const servicioId = requiredString(request.data?.servicioId, "Servicio");
-  const inicioRaw = requiredString(request.data?.inicio, "Fecha y hora", 64);
-  const inicioDate = new Date(inicioRaw);
-  const inicioMs = inicioDate.getTime();
-  if (!Number.isFinite(inicioMs) || inicioDate.toISOString() !== inicioRaw) {
-    throw new HttpsError("invalid-argument", "La fecha debe enviarse en formato ISO válido.");
-  }
-  if (inicioMs <= Date.now()) throw new HttpsError("invalid-argument", "La cita debe programarse en el futuro.");
-  if (inicioMs > Date.now() + 365 * 24 * 60 * 60 * 1000) throw new HttpsError("invalid-argument", "La fecha excede el plazo de reserva permitido.");
-  const empleadoId = typeof request.data?.empleadoId === "string" ? request.data.empleadoId.trim() : "";
-  const notas = typeof request.data?.notas === "string" ? request.data.notas.trim().slice(0, 500) : "";
-  const userRef = db.collection("usuarios").doc(uid);
+  const negocioId = requiredString(request.data?.negocioId, "Negocio", 128);
+  const servicioId = requiredString(request.data?.servicioId, "Servicio", 128);
+  const empleadoId = requiredString(request.data?.empleadoId, "Profesional", 128);
+  const requested = validateRequestedInstant(requiredString(request.data?.inicio, "Fecha y hora", 64));
+  if (requested.millis <= Date.now()) throw new HttpsError("invalid-argument", "La cita debe programarse en el futuro.");
+  const notes = optionalNote(request.data?.notas);
   const businessRef = db.collection("negocios").doc(negocioId);
   const serviceRef = businessRef.collection("servicios").doc(servicioId);
+  const businessEmployeeRef = businessRef.collection("empleados").doc(empleadoId);
   const appointmentRef = db.collection("citas").doc();
-  const now = Timestamp.now();
-  let resultState = "";
+  const employeeNoticeRef = db.collection("notificaciones").doc();
+  let holdExpiresAt = Timestamp.fromMillis(Date.now() + HOLD_DURATION_MS);
 
   await db.runTransaction(async (transaction) => {
-    const userSnapshot = await transaction.get(userRef);
-    const businessSnapshot = await transaction.get(businessRef);
-    const serviceSnapshot = await transaction.get(serviceRef);
-    if (!userSnapshot.exists || roleFrom(userSnapshot.data() ?? {}) !== "cliente") {
-      throw new HttpsError("permission-denied", "Solo un perfil cliente puede solicitar citas.");
-    }
-    if (!businessSnapshot.exists || businessSnapshot.data()?.activo !== true) {
-      throw new HttpsError("not-found", "El negocio no está disponible.");
-    }
-    if (!serviceSnapshot.exists || serviceSnapshot.data()?.activo !== true) {
-      throw new HttpsError("not-found", "El servicio no está disponible.");
-    }
-
+    const [customer, businessSnapshot, serviceSnapshot, employeeSnapshot] = await Promise.all([
+      loadProfileInTransaction(transaction, uid),
+      transaction.get(businessRef),
+      transaction.get(serviceRef),
+      transaction.get(businessEmployeeRef),
+    ]);
+    if (!customer.profile || customer.role !== "cliente") throw new HttpsError("permission-denied", "Solo un perfil cliente puede solicitar citas.");
+    if (!businessSnapshot.exists || businessSnapshot.data()?.activo !== true) throw new HttpsError("not-found", "El negocio no está disponible.");
+    if (!serviceSnapshot.exists) throw new HttpsError("not-found", "El servicio no existe.");
+    if (!employeeSnapshot.exists) throw new HttpsError("not-found", "El profesional no está disponible.");
     const business = businessSnapshot.data() ?? {};
+    const mode = validBusinessMode(business);
     const service = serviceSnapshot.data() ?? {};
-    const modeValue = business.modoNegocio;
-    if (modeValue !== "multiEmpleado" && modeValue !== "unipersonal") {
-      throw new HttpsError("failed-precondition", "Configura modoNegocio como unipersonal o multiEmpleado antes de habilitar citas.");
+    const { duration, price } = validService(service);
+    const employee = employeeSnapshot.data() ?? {};
+    if (employee.activo !== true || employee.publica !== true || employee.disponible !== true) {
+      throw new HttpsError("failed-precondition", "Ese empleado no está publicado y disponible para citas.");
     }
-    const mode = modeValue;
-    const duration = Number(service.duracionMin);
-    const priceValue = service.precio;
-    const price = typeof priceValue === "number" ? priceValue : typeof priceValue === "string" && priceValue.trim() ? Number(priceValue) : Number.NaN;
-    if (!Number.isInteger(duration) || duration < 5 || duration > MAX_BOOKING_MINUTES) {
-      throw new HttpsError("failed-precondition", "El servicio no tiene una duración válida configurada.");
-    }
-    if (!Number.isFinite(price) || price < 0) {
-      throw new HttpsError("failed-precondition", "El servicio no tiene un precio numérico configurado.");
-    }
+    const employeeUid = requiredString(employee.usuarioId ?? employee.uid ?? "", "UID del empleado", 128);
+    const staffProfile = await loadProfileInTransaction(transaction, employeeUid);
+    if (!staffProfile.profile || staffProfile.role !== "empleado") throw new HttpsError("failed-precondition", "El perfil de Authentication no está aprobado como empleado.");
 
-    let employee: DocumentData | null = null;
-    let employeeUid = "";
-    if (mode === "multiEmpleado") {
-      if (!empleadoId) throw new HttpsError("invalid-argument", "Selecciona a la profesional para esta cita.");
-      const employeeSnapshot = await transaction.get(businessRef.collection("empleados").doc(empleadoId));
-      if (!employeeSnapshot.exists || employeeSnapshot.data()?.activo !== true || employeeSnapshot.data()?.publica !== true) {
-        throw new HttpsError("not-found", "La profesional no está disponible para reservas.");
-      }
-      employee = employeeSnapshot.data() ?? {};
-      employeeUid = String(employee.usuarioId ?? employee.uid ?? "");
-    } else if (empleadoId) {
-      throw new HttpsError("invalid-argument", "Este negocio no asigna profesionales por cita.");
-    }
+    const [businessHoursSnapshot, employeeDaySnapshot] = await Promise.all([
+      transaction.get(businessRef.collection("horarios").doc(String(requested.weekday))),
+      transaction.get(businessEmployeeRef.collection("disponibilidad").doc(String(requested.weekday))),
+    ]);
+    const hours = validateBusinessHours(businessHoursSnapshot.data());
+    if (!hours) throw new HttpsError("failed-precondition", "El negocio no atiende ese día.");
+    const schedule = employeeDaySnapshot.data();
+    if (!employeeDaySnapshot.exists || !schedule || schedule.activo !== true) throw new HttpsError("failed-precondition", "El empleado no tiene turno activo para ese día.");
+    const nowMs = Date.now();
+    const conflicts = await appointmentIntervals(transaction, negocioId, empleadoId, requested.date, nowMs);
+    const slots = computeSlots(requested.date, nowMs, duration, hours, schedule, conflicts);
+    const selectedSlot = slots.find((slot) => slot.inicioMs === requested.millis);
+    if (!selectedSlot) throw new HttpsError("already-exists", "Ese horario ya no está disponible o no cabe el servicio completo dentro del turno.");
 
-    const endMs = inicioMs + duration * 60_000;
-    const hoursSnapshot = await transaction.get(businessRef.collection("horarios").doc(scheduleDocumentId(inicioMs)));
-    assertWithinBusinessHours(hoursSnapshot.data(), inicioMs, endMs);
-    let conflictsQuery = db.collection("citas").where("negocioId", "==", negocioId);
-    if (mode === "multiEmpleado") conflictsQuery = conflictsQuery.where("empleadoId", "==", empleadoId);
-    conflictsQuery = conflictsQuery
-      .where("inicio", ">=", Timestamp.fromMillis(inicioMs - OVERLAP_LOOKBACK_MS))
-      .where("inicio", "<=", Timestamp.fromMillis(endMs));
-    const conflicts = await transaction.get(conflictsQuery);
-    const hasConflict = conflicts.docs.some((item) => {
-      const existing = item.data();
-      if (!ACTIVE_STATES.has(String(existing.estado))) return false;
-      const holdExpiry = timestampMillis(existing.holdExpiresAt);
-      if (existing.estado === "hold" && holdExpiry !== null && holdExpiry <= Date.now()) return false;
-      const existingStart = timestampMillis(existing.inicio);
-      const storedEnd = timestampMillis(existing.fin);
-      const existingDuration = Number(existing.duracionMin);
-      const existingEnd = storedEnd ?? (existingStart !== null && Number.isFinite(existingDuration) ? existingStart + existingDuration * 60_000 : null);
-      return existingStart !== null && existingEnd !== null && inicioMs < existingEnd && endMs > existingStart;
-    });
-    if (hasConflict) throw new HttpsError("already-exists", "La franja ya no está disponible. Elige otra hora.");
-
-    const state = mode === "unipersonal" ? "confirmada" : "hold";
-    resultState = state;
-    const userData = userSnapshot.data() ?? {};
+    holdExpiresAt = Timestamp.fromMillis(nowMs + HOLD_DURATION_MS);
+    const customerProfile = customer.profile;
+    const staffName = String(employee.name ?? employee.nombre ?? staffProfile.profile?.name ?? "Profesional");
     const booking: DocumentData = {
       negocioId,
       negocioNombre: String(business.nombre ?? business.nombreNegocio ?? business.name ?? "EUFORIA"),
       clienteId: uid,
-      clienteEmail: String(request.auth?.token.email ?? userData.email ?? ""),
-      clienteNombre: String(userData.displayName ?? userData.nombre ?? request.auth?.token.name ?? ""),
-      clienteTelefono: String(userData.phone ?? ""),
+      clienteEmail: String(request.auth?.token.email ?? customerProfile.email ?? ""),
+      clienteNombre: String(customerProfile.name ?? customerProfile.displayName ?? request.auth?.token.name ?? "Cliente"),
+      clienteTelefono: String(customerProfile.phone ?? ""),
       servicioId,
       servicioNombre: String(service.nombre ?? service.name ?? "Servicio"),
       precio: price,
       duracionMin: duration,
-      inicio: Timestamp.fromMillis(inicioMs),
-      fin: Timestamp.fromMillis(endMs),
+      inicio: Timestamp.fromMillis(selectedSlot.inicioMs),
+      fin: Timestamp.fromMillis(selectedSlot.finMs),
+      empleadoId,
+      empleadoUid: employeeUid,
+      empleadoNombre: staffName,
+      empleadoCodigo: String(employee.Empleado ?? ""),
       modoNegocio: mode,
-      estado: state,
-      createdAt: now,
-      ...(mode === "multiEmpleado" ? { empleadoId, empleadoUid: employeeUid, holdExpiresAt: Timestamp.fromMillis(Date.now() + HOLD_DURATION_MS) } : {}),
-      ...(employee ? { empleadoNombre: String(employee.nombre ?? employee.displayName ?? "Profesional") } : {}),
-      ...(notas ? { notas } : {}),
+      estado: "hold",
+      holdExpiresAt,
+      createdAt: Timestamp.fromMillis(nowMs),
+      ...(notes ? { notas: notes } : {}),
     };
     transaction.set(appointmentRef, booking);
+    transaction.set(employeeNoticeRef, {
+      destinatarioId: employeeUid,
+      tipo: "nueva_solicitud_cita",
+      titulo: "Nueva solicitud de cita",
+      cuerpo: `${String(customerProfile.name ?? "Un cliente")} solicita ${String(service.nombre ?? "un servicio")} a las ${new Date(selectedSlot.inicioMs).toLocaleTimeString("es-HN", { timeZone: HONDURAS_TIME_ZONE, hour: "numeric", minute: "2-digit" })}.`,
+      citaId: appointmentRef.id,
+      negocioId,
+      createdAt: Timestamp.fromMillis(nowMs),
+      leida: false,
+    });
   });
-
-  return { citaId: appointmentRef.id, estado: resultState };
+  return { citaId: appointmentRef.id, estado: "hold", holdExpiresAt: holdExpiresAt.toDate().toISOString() };
 });
 
-export const aprobarCita = onCall<DecisionInput>(async (request) => decideAppointment(request, "confirmada"));
-export const rechazarCita = onCall<DecisionInput>(async (request) => decideAppointment(request, "rechazada"));
+async function decideAppointment(request: CallableRequest<DecisionInput>, nextState: "confirmada" | "rechazada") {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  const citaId = requiredString(request.data?.citaId, "Identificador de cita", 128);
+  const note = optionalNote(request.data?.notas);
+  const appointmentRef = db.collection("citas").doc(citaId);
+  const noticeRef = db.collection("notificaciones").doc();
+  await db.runTransaction(async (transaction) => {
+    const [profile, appointmentSnapshot] = await Promise.all([
+      loadProfileInTransaction(transaction, uid),
+      transaction.get(appointmentRef),
+    ]);
+    if (!profile.profile || !["admin", "empleado"].includes(profile.role)) throw new HttpsError("permission-denied", "No existe un perfil autorizado para decidir citas.");
+    if (!appointmentSnapshot.exists) throw new HttpsError("not-found", "La cita no existe.");
+    const appointment = appointmentSnapshot.data() ?? {};
+    const assignedEmployee = appointment.empleadoUid === uid || appointment.empleadoId === uid;
+    if (profile.role !== "admin" && !assignedEmployee) throw new HttpsError("permission-denied", "Solo el empleado asignado o administración pueden decidir esta cita.");
+    if (!assignedEmployee && profile.role === "empleado") throw new HttpsError("permission-denied", "Solo puedes decidir las citas asignadas a tu perfil.");
+    if (!(profile.role === "admin" || profile.role === "empleado")) throw new HttpsError("permission-denied", "No tienes permiso para decidir esta cita.");
+    if (!new Set(["hold", "pendiente_de_aprobacion"]).has(String(appointment.estado))) throw new HttpsError("failed-precondition", "La cita ya no está pendiente de decisión.");
+    const holdEnd = timestampMillis(appointment.holdExpiresAt);
+    if (appointment.estado === "hold" && holdEnd !== null && holdEnd <= Date.now()) throw new HttpsError("deadline-exceeded", "La solicitud temporal ya venció.");
+    const now = Timestamp.now();
+    transaction.update(appointmentRef, {
+      estado: nextState,
+      decisionPor: uid,
+      decisionAt: now,
+      holdExpiresAt: FieldValue.delete(),
+      ...(nextState === "rechazada" && note ? { notasDecision: note } : {}),
+    });
+    transaction.set(noticeRef, {
+      destinatarioId: String(appointment.clienteId ?? ""),
+      tipo: nextState === "confirmada" ? "cita_confirmada" : "cita_rechazada",
+      titulo: nextState === "confirmada" ? "Cita confirmada" : "Solicitud no aceptada",
+      cuerpo: nextState === "confirmada" ? "El empleado confirmó tu hora. Tu cita ya está agendada." : note || "El empleado no pudo aceptar esa hora. Elige otra franja disponible.",
+      citaId,
+      negocioId: String(appointment.negocioId ?? ""),
+      createdAt: now,
+      leida: false,
+    });
+  });
+  return { ok: true as const, estado: nextState };
+}
 
-export const expirarHolds = onSchedule({ schedule: "every 5 minutes", timeZone: "America/Tegucigalpa" }, async () => {
+export const aprobarCita = onCall<DecisionInput>((request) => decideAppointment(request, "confirmada"));
+export const rechazarCita = onCall<DecisionInput>((request) => decideAppointment(request, "rechazada"));
+
+async function transitionAssignedAppointment(request: CallableRequest<DecisionInput>, action: "start" | "finish") {
+  const uid = request.auth?.uid;
+  if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
+  const citaId = requiredString(request.data?.citaId, "Identificador de cita", 128);
+  const appointmentRef = db.collection("citas").doc(citaId);
+  const now = Timestamp.now();
+  let actualMinutes = 0;
+  await db.runTransaction(async (transaction) => {
+    const [profile, appointmentSnapshot] = await Promise.all([
+      loadProfileInTransaction(transaction, uid),
+      transaction.get(appointmentRef),
+    ]);
+    if (!profile.profile || profile.role !== "empleado") throw new HttpsError("permission-denied", "Solo el empleado asignado puede marcar el servicio.");
+    if (!appointmentSnapshot.exists) throw new HttpsError("not-found", "La cita no existe.");
+    const appointment = appointmentSnapshot.data() ?? {};
+    if (appointment.empleadoUid !== uid && appointment.empleadoId !== uid) throw new HttpsError("permission-denied", "Esta cita no está asignada a tu perfil.");
+    if (action === "start") {
+      if (appointment.estado !== "confirmada") throw new HttpsError("failed-precondition", "Solo puedes iniciar una cita confirmada.");
+      transaction.update(appointmentRef, { estado: "en_curso", startedAt: now, iniciadoPor: uid });
+      return;
+    }
+    if (appointment.estado !== "en_curso") throw new HttpsError("failed-precondition", "Solo puedes finalizar un servicio que ya inició.");
+    const startedAt = timestampMillis(appointment.startedAt);
+    if (startedAt === null || startedAt > now.toMillis()) throw new HttpsError("failed-precondition", "La cita no tiene una hora de inicio válida.");
+    const elapsedMs = now.toMillis() - startedAt;
+    actualMinutes = Math.round((elapsedMs / 60_000) * 100) / 100;
+    if (actualMinutes <= 0) throw new HttpsError("failed-precondition", "Espera al menos un minuto antes de finalizar el servicio.");
+    transaction.update(appointmentRef, {
+      estado: "completada",
+      completedAt: now,
+      finalizadoPor: uid,
+      duracionRealMin: actualMinutes,
+      duracionRealSeg: Math.round(elapsedMs / 1000),
+    });
+  });
+  return action === "finish" ? { ok: true as const, duracionRealMin: actualMinutes } : { ok: true as const };
+}
+
+export const iniciarServicio = onCall<DecisionInput>((request) => transitionAssignedAppointment(request, "start"));
+export const finalizarServicio = onCall<DecisionInput>((request) => transitionAssignedAppointment(request, "finish"));
+
+export const expirarHolds = onSchedule({ schedule: "every 5 minutes", timeZone: HONDURAS_TIME_ZONE }, async () => {
   const now = Timestamp.now();
   const snapshot = await db.collection("citas")
     .where("estado", "==", "hold")
     .where("holdExpiresAt", "<=", now)
-    .limit(400)
+    .limit(200)
     .get();
   if (snapshot.empty) return;
   const batch = db.batch();
@@ -272,10 +605,8 @@ export const expirarHolds = onSchedule({ schedule: "every 5 minutes", timeZone: 
 export const registrarAviso = onCall<{ destinatarioId: string; titulo: string; cuerpo: string }>(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Debes iniciar sesión.");
-  const profileSnapshot = await db.collection("usuarios").doc(uid).get();
-  if (!profileSnapshot.exists || roleFrom(profileSnapshot.data() ?? {}) !== "admin") {
-    throw new HttpsError("permission-denied", "Solo el administrador puede emitir avisos.");
-  }
+  const profile = await loadProfile(uid);
+  if (!profile.profile || profile.role !== "admin") throw new HttpsError("permission-denied", "Solo administración puede emitir avisos.");
   const destinatarioId = requiredString(request.data?.destinatarioId, "Destinatario", 128);
   const titulo = requiredString(request.data?.titulo, "Título", 120);
   const cuerpo = requiredString(request.data?.cuerpo, "Mensaje", 1000);
