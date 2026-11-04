@@ -10,9 +10,12 @@ import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, loadBusinesses, type BusinessRecord } from "@/lib/appointments";
 import { createEmployeeProfile, subscribeAdminClients, subscribeAdminEmployees, type CustomerProfile, type EmployeeProfile } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
+import { useThemeContext } from "@/lib/theme-provider";
 
 function ClientsContent() {
   const { user, profile } = useAuthSession();
+  const { colorScheme } = useThemeContext();
+  const isDark = colorScheme === "dark";
   const uid = user?.uid;
   const isAdmin = profileRole(profile) === "admin";
   const [clients, setClients] = useState<CustomerProfile[]>([]);
@@ -103,21 +106,21 @@ function ClientsContent() {
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.titleRow}><View><Text style={styles.eyebrow}>PERFILES FIREBASE REALES</Text><Text style={styles.title}>Clientes y equipo</Text></View></View>
+          <View style={styles.titleRow}><View><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>PERFILES FIREBASE REALES</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Clientes y equipo</Text></View></View>
           <View style={styles.metrics}>
             <Metric label="Clientes" value={loading ? "…" : String(clients.length)} />
             <Metric label="Nuevos · 30 días" value={loading ? "…" : String(newClients)} />
             <Metric label="Empleados" value={String(employees.length)} />
           </View>
           {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
-          {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
+          {error ? <Text accessibilityRole="alert" style={[styles.error, isDark && { color: BRAND.onDarkErrorText }]}>{error}</Text> : null}
 
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Equipo autorizado</Text><Text style={styles.sectionCaption}>Activa a una persona después de que se registre como cliente.</Text></View>
+          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Equipo autorizado</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Activa a una persona después de que se registre como cliente.</Text></View>
           {employees.length === 0 ? <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>Aún no hay perfiles de empleado. La cuenta nueva primero debe registrarse como cliente.</Text></View> : employees.map((employee) => <EmployeeCard key={employee.id} item={employee} businessName={businesses.find((business) => business.id === employee.negocioId)?.nombre} />)}
 
-          <View style={styles.sectionHeader}><Text style={styles.sectionTitle}>Perfiles cliente</Text><Text style={styles.sectionCaption}>Datos de users/{"{uid}"} y usuarios/{"{uid}"}, unidos por el UID de Authentication.</Text></View>
+          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Datos de users/{"{uid}"} y usuarios/{"{uid}"}, unidos por el UID de Authentication.</Text></View>
           <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo, teléfono o UID" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.hint}>Leyendo perfiles Firebase…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{clients.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{clients.length === 0 ? "Al registrarse, cada persona queda guardada con el UID de Authentication y rol cliente." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onCreateEmployee={() => { setSelectedClient(client); setEmployeeCode(""); setNotice(""); }} />)}
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Leyendo perfiles Firebase…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{clients.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{clients.length === 0 ? "Al registrarse, cada persona queda guardada con el UID de Authentication y rol cliente." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onCreateEmployee={() => { setSelectedClient(client); setEmployeeCode(""); setNotice(""); }} />)}
         </ScrollView>
         <Modal visible={Boolean(selectedClient)} transparent animationType="slide" onRequestClose={() => setSelectedClient(null)}>
           <View style={styles.modalShade}><View style={styles.sheet}>

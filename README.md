@@ -6,6 +6,8 @@ Aplicación móvil Expo Router / React Native / TypeScript para clientes, emplea
 
 El código implementa login y registro de clientes, perfiles Firebase compatibles con la colección antigua `users` y la colección de app `usuarios`, lista administrativa de clientes, activación de empleados a partir de cuentas existentes, catálogo de servicios con duración, turnos semanales de empleado, cálculo seguro de franjas libres, reservas con control de conflictos, confirmación/rechazo, inicio/final del trabajo y métricas de tiempo real.
 
+En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino usan texto blanco; las tarjetas claras conservan su tipografía oscura. Las instrucciones de Firebase de esta guía son manuales: esta entrega no ejecuta despliegues.
+
 **No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales/variables Firebase se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
 Los avisos de nuevas solicitudes se guardan en Firestore y aparecen en la agenda de EUFORIA en tiempo real cuando la app escucha la cuenta. No son notificaciones push de Android/iOS: FCM y credenciales nativas no están integrados en esta fase.

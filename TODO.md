@@ -11,6 +11,7 @@
 - [x] **Inicio, finalización y métricas:** solo el empleado asignado puede iniciar la cita confirmada (`en_curso`, `startedAt`) y finalizarla (`completada`, `completedAt`, `duracionRealMin/Seg`) mediante Functions. El resumen del administrador presenta conteo y promedio de duración real por empleado/servicio.
 - [x] **Protección Firebase:** Rules conservan denegación por defecto, acceso a perfiles propios/roles autorizados, lectura administrativa de clientes, lectura de citas por cliente/profesional/admin y bloqueo de escrituras directas a roles, disponibilidad, citas y transiciones privilegiadas. Índices incluyen citas por empleado/cliente, selector de profesionales y notificaciones.
 - [x] **Documentación:** README explica perfiles, los campos del esquema enviado, horarios reales, servicios/duración, creación segura de empleado, confirmaciones, límites y comandos de despliegue manual.
+- [x] **Contraste en tema rosado oscuro:** el nombre EUFORIA y los encabezados sobre el fondo vino se muestran en blanco; el texto secundario y de error usa tonos claros, mientras las tarjetas claras conservan texto oscuro.
 
 ## Verificación local
 

@@ -10,9 +10,12 @@ import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, subscribeAdminAppointments, type AppointmentRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { hasProfileRole } from "@/lib/roles";
+import { useThemeContext } from "@/lib/theme-provider";
 
 function SummaryContent() {
   const { user, profile } = useAuthSession();
+  const { colorScheme } = useThemeContext();
+  const isDark = colorScheme === "dark";
   const uid = user?.uid;
   const isAdmin = hasProfileRole(profile, ["admin"]);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
@@ -72,7 +75,7 @@ function SummaryContent() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
           <View style={styles.hero}>
-            <View><Text style={styles.eyebrow}>RESUMEN DE TU ESTUDIO</Text><Text style={styles.headline}>Todo bajo control,</Text><Text style={styles.headlineAccent}>un día a la vez.</Text></View>
+            <View><Text style={[styles.eyebrow, isDark && styles.onDarkText]}>RESUMEN DE TU ESTUDIO</Text><Text style={[styles.headline, isDark && styles.onDarkText]}>Todo bajo control,</Text><Text style={[styles.headlineAccent, isDark && styles.onDarkText]}>un día a la vez.</Text></View>
             <View style={styles.datePill}><CalendarDays size={15} color={BRAND.primary} /><Text style={styles.dateText}>{now ? new Date(now).toLocaleDateString("es-HN", { timeZone: "America/Tegucigalpa", day: "numeric", month: "short" }) : "—"}</Text></View>
           </View>
           <View style={styles.metrics}>
@@ -83,10 +86,10 @@ function SummaryContent() {
             <Metric icon={<TrendingUp size={19} color={BRAND.gold} />} label="Ingresos completados" value={formatCurrency(completedRevenue)} detail="Citas del periodo visible" />
             <Metric icon={<CalendarDays size={19} color={BRAND.wine} />} label="Registros" value={String(appointments.length)} detail="Últimos 30 días" />
           </View>
-          <View style={styles.sectionRow}><Text style={styles.sectionTitle}>Próximas citas</Text><Pressable onPress={() => router.push("/employee/schedule")}><Text style={styles.link}>Ver agenda</Text></Pressable></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Actualizando en tiempo real…</Text></View> : error ? <View style={styles.state}><Text style={styles.errorText}>No se pudo leer la agenda: {error}</Text><Text style={styles.stateText}>Comprueba reglas e índices de Firestore.</Text></View> : upcoming.length === 0 ? <Empty icon={<Clock3 size={23} color={BRAND.primary} />} title="No hay citas próximas" text="Las solicitudes reales aparecerán aquí cuando un cliente reserve." /> : upcoming.slice(0, 5).map((item) => <AppointmentTile key={item.id} item={item} />)}
-          <Pressable accessibilityRole="button" onPress={() => router.push("../admin/services")} style={styles.serviceManager}><View style={styles.serviceIcon}><Scissors size={19} color={BRAND.primaryDark} /></View><View style={{ flex: 1 }}><Text style={styles.serviceManagerTitle}>Servicios y tiempos estimados</Text><Text style={styles.serviceManagerHint}>Configura precio y duración para calcular la disponibilidad</Text></View><Text style={styles.link}>Abrir</Text></Pressable>
-          <View style={styles.sectionRow}><Text style={styles.sectionTitle}>Rendimiento del equipo</Text><Text style={styles.period}>Citas completadas · 30 días</Text></View>
+          <View style={styles.sectionRow}><Text style={[styles.sectionTitle, isDark && styles.onDarkText]}>Próximas citas</Text><Pressable onPress={() => router.push("/employee/schedule")}><Text style={[styles.link, isDark && styles.onDarkText]}>Ver agenda</Text></Pressable></View>
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Actualizando en tiempo real…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && styles.onDarkErrorText]}>No se pudo leer la agenda: {error}</Text><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Comprueba reglas e índices de Firestore.</Text></View> : upcoming.length === 0 ? <Empty icon={<Clock3 size={23} color={BRAND.primary} />} title="No hay citas próximas" text="Las solicitudes reales aparecerán aquí cuando un cliente reserve." /> : upcoming.slice(0, 5).map((item) => <AppointmentTile key={item.id} item={item} />)}
+          <Pressable accessibilityRole="button" onPress={() => router.push("../admin/services")} style={styles.serviceManager}><View style={styles.serviceIcon}><Scissors size={19} color={BRAND.primaryDark} /></View><View style={{ flex: 1 }}><Text style={styles.serviceManagerTitle}>Servicios y tiempos estimados</Text><Text style={styles.serviceManagerHint}>Configura precio y duración para calcular la disponibilidad</Text></View><Text style={styles.managerLink}>Abrir</Text></Pressable>
+          <View style={styles.sectionRow}><Text style={[styles.sectionTitle, isDark && styles.onDarkText]}>Rendimiento del equipo</Text><Text style={[styles.period, isDark && styles.onDarkMutedText]}>Citas completadas · 30 días</Text></View>
           {performance.length === 0 ? <Empty icon={<TrendingUp size={22} color={BRAND.primary} />} title="Aún no hay tiempos reales" text="Cuando un empleado inicie y finalice un servicio, aquí verás los minutos reales por empleado y tipo de trabajo." /> : performance.map((item) => <View key={`${item.employee}:${item.service}`} style={styles.performanceCard}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.performanceName}>{item.employee}</Text><Text numberOfLines={1} style={styles.performanceService}>{item.service}</Text></View><View style={styles.performanceNumbers}><Text style={styles.performanceAverage}>{formatMinutes(item.actualTotal / item.count)}</Text><Text style={styles.performanceDetail}>promedio real · {item.count} trabajo{item.count === 1 ? "" : "s"}</Text>{item.estimated > 0 ? <Text style={styles.performanceDetail}>Estimado: {formatMinutes(item.estimated)}</Text> : null}</View></View>)}
         </ScrollView>
       </ScreenContainer>
@@ -116,6 +119,9 @@ const styles = StyleSheet.create({
   eyebrow: { color: BRAND.primary, fontSize: 10, fontWeight: "800", letterSpacing: 1.2 },
   headline: { color: BRAND.wine, fontSize: 27, fontWeight: "800", marginTop: 5 },
   headlineAccent: { color: BRAND.primary, fontSize: 27, fontWeight: "800", marginTop: 1 },
+  onDarkText: { color: BRAND.onDarkText },
+  onDarkMutedText: { color: BRAND.onDarkMutedText },
+  onDarkErrorText: { color: BRAND.onDarkErrorText },
   datePill: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: BRAND.surface, borderRadius: 999, borderWidth: 1, borderColor: BRAND.border, paddingHorizontal: 10, paddingVertical: 8 },
   dateText: { color: BRAND.muted, fontSize: 10, fontWeight: "700" },
   metrics: { flexDirection: "row", gap: 12, paddingHorizontal: 20, marginTop: 14 },
@@ -127,6 +133,7 @@ const styles = StyleSheet.create({
   sectionRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", paddingHorizontal: 20, marginTop: 24, marginBottom: 11 },
   sectionTitle: { color: BRAND.wine, fontSize: 16, fontWeight: "800" },
   link: { color: BRAND.primaryDark, fontSize: 12, fontWeight: "800" },
+  managerLink: { color: BRAND.primaryDark, fontSize: 12, fontWeight: "800" },
   state: { alignItems: "center", gap: 8, padding: 24, marginHorizontal: 20 },
   stateText: { color: BRAND.muted, fontSize: 12, textAlign: "center" },
   errorText: { color: BRAND.error, fontSize: 13, textAlign: "center" },

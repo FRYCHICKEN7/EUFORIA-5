@@ -39,6 +39,7 @@ No desplegar a Firebase real, no probar haciendo escrituras en producción, no h
 - **Movimiento:** boutique de belleza premium con composición editorial, fondo blanco cálido, rosa rubor, vino profundo y acento dorado discreto.
 - **Principios:** lectura rápida, superficies limpias, controles amplios de uso con una mano, datos reales y estados operativos explícitos.
 - **Color:** fondo `#FFF5F7`, superficies `#FFFFFF`, acción `#D85C7A`, vino `#5C1A2E`, rosa suave `#FCE8EE` y verde de acento; modos claro y rosado oscuro.
+- **Contraste oscuro:** marca y encabezados blancos sobre el fondo vino; texto secundario en tono claro y tarjetas claras con tipografía oscura.
 - **Layout y firma:** encabezado EUFORIA, tarjetas suaves, botones/píldoras accesibles, métricas y listas; estados vacíos aclaran la configuración faltante.
 - **Interacción:** feedback inmediato, mensajes accionables, acciones privilegiadas confirmadas por servidor, refresh al fallar un slot ocupado.
 - **Tipografía/voz:** sans serif del sistema, pesos 700–800, tono cálido, premium y directo.

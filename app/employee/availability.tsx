@@ -8,6 +8,7 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { loadEmployeeAvailability, saveEmployeeAvailability, type WeeklyAvailabilityDay } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
+import { useThemeContext } from "@/lib/theme-provider";
 
 const WEEK = [
   { id: 1, label: "Lunes" }, { id: 2, label: "Martes" }, { id: 3, label: "Miércoles" },
@@ -17,6 +18,8 @@ const DEFAULT_WEEK: WeeklyAvailabilityDay[] = Array.from({ length: 7 }, (_, dia)
 
 function AvailabilityContent() {
   const { user, profile } = useAuthSession();
+  const { colorScheme } = useThemeContext();
+  const isDark = colorScheme === "dark";
   const uid = user?.uid;
   const isEmployee = profileRole(profile) === "empleado";
   const [businessName, setBusinessName] = useState("");
@@ -81,15 +84,15 @@ function AvailabilityContent() {
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.heading}><Text style={styles.eyebrow}>TU AGENDA</Text><Text style={styles.title}>Disponibilidad</Text><Text style={styles.subtitle}>Define cuándo puede elegirte un cliente. Horas locales de Honduras.</Text></View>
+          <View style={styles.heading}><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>TU AGENDA</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Disponibilidad</Text><Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Define cuándo puede elegirte un cliente. Horas locales de Honduras.</Text></View>
           <View style={styles.business}><Text style={styles.businessLabel}>Negocio asignado</Text><Text style={styles.businessName}>{businessName || businessId || "Cargando…"}</Text></View>
           <View style={styles.availableCard}>
             <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: available }} onPress={() => setAvailable((value) => !value)} style={[styles.check, available && styles.checkSelected]}><Check size={17} color={available ? "#FFFFFF" : BRAND.muted} /></Pressable>
             <View style={styles.availableCopy}><Text style={styles.availableTitle}>Disponible para citas</Text><Text style={styles.availableHint}>{available ? "Tu perfil puede mostrarse a clientes dentro de tus turnos libres." : "Desactivado: los clientes no podrán seleccionarte."}</Text></View>
           </View>
           <View style={styles.note}><Clock3 size={17} color={BRAND.primaryDark} /><Text style={styles.noteText}>Cada servicio debe caber completo antes de terminar tu turno. Los cruces con citas existentes no se ofrecen.</Text></View>
-          <Text style={styles.sectionTitle}>Horario semanal</Text>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Cargando tu horario guardado…</Text></View> : WEEK.map(({ id, label }) => {
+          <Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Horario semanal</Text>
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Cargando tu horario guardado…</Text></View> : WEEK.map(({ id, label }) => {
             const day = days.find((item) => item.dia === id) ?? DEFAULT_WEEK[id];
             return <View key={id} style={[styles.dayCard, !day.activo && styles.dayDisabled]}>
               <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: day.activo }} onPress={() => toggleDay(id)} style={[styles.dayCheck, day.activo && styles.dayCheckActive]}><Check size={14} color={day.activo ? "#FFFFFF" : BRAND.muted} /></Pressable>
@@ -97,10 +100,10 @@ function AvailabilityContent() {
               {day.activo ? <View style={styles.timeGroup}><TextInput accessibilityLabel={`${label}: hora de inicio`} value={day.inicio} onChangeText={(value) => changeTime(id, "inicio", value)} keyboardType="numbers-and-punctuation" maxLength={5} style={styles.timeInput} /><Text style={styles.to}>a</Text><TextInput accessibilityLabel={`${label}: hora de fin`} value={day.fin} onChangeText={(value) => changeTime(id, "fin", value)} keyboardType="numbers-and-punctuation" maxLength={5} style={styles.timeInput} /></View> : <Text style={styles.dayOff}>Descanso</Text>}
             </View>;
           })}
-          {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-          {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
+          {error ? <Text accessibilityRole="alert" style={[styles.error, isDark && { color: BRAND.onDarkErrorText }]}>{error}</Text> : null}
+          {message ? <Text accessibilityRole="alert" style={[styles.message, isDark && { color: BRAND.onDarkText }]}>{message}</Text> : null}
           <Pressable disabled={loading || saving} onPress={() => void save()} style={[styles.saveButton, (loading || saving) && styles.disabled]}><Text style={styles.saveText}>{saving ? "Guardando…" : "Guardar horario y disponibilidad"}</Text></Pressable>
-          <Text style={styles.footer}>El horario inicial sugerido es 08:00 a 17:00; se guarda solo cuando presionas el botón.</Text>
+          <Text style={[styles.footer, isDark && { color: BRAND.onDarkMutedText }]}>El horario inicial sugerido es 08:00 a 17:00; se guarda solo cuando presionas el botón.</Text>
         </ScrollView>
       </ScreenContainer>
     </AuthGate>

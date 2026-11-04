@@ -10,9 +10,12 @@ import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, decideAppointment, finishService, startService, subscribeAdminAppointments, subscribeEmployeeAppointments, type AppointmentRecord } from "@/lib/appointments";
 import { markNotificationRead, subscribeNotifications, type AppNotification } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
+import { useThemeContext } from "@/lib/theme-provider";
 
 function ScheduleContent() {
   const { user, profile } = useAuthSession();
+  const { colorScheme } = useThemeContext();
+  const isDark = colorScheme === "dark";
   const uid = user?.uid;
   const role = profileRole(profile) ?? "";
   const isAdmin = role === "admin";
@@ -95,13 +98,13 @@ function ScheduleContent() {
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.headingRow}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>{isAdmin ? "CONTROL DE CITAS" : "AGENDA DE TU TURNO"}</Text><Text style={styles.title}>{isAdmin ? "Solicitudes y citas" : "Mi agenda"}</Text><Text style={styles.subtitle}>La lista se actualiza en tiempo real cuando un cliente solicita o el equipo responde.</Text></View>{isEmployee && <Pressable accessibilityRole="button" onPress={() => router.push("./availability")} style={styles.iconButton}><Settings2 size={19} color={BRAND.primaryDark} /></Pressable>}</View>
+          <View style={styles.headingRow}><View style={{ flex: 1 }}><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>{isAdmin ? "CONTROL DE CITAS" : "AGENDA DE TU TURNO"}</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>{isAdmin ? "Solicitudes y citas" : "Mi agenda"}</Text><Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>La lista se actualiza en tiempo real cuando un cliente solicita o el equipo responde.</Text></View>{isEmployee && <Pressable accessibilityRole="button" onPress={() => router.push("./availability")} style={styles.iconButton}><Settings2 size={19} color={BRAND.primaryDark} /></Pressable>}</View>
           {isEmployee && <Pressable accessibilityRole="button" onPress={() => router.push("./availability")} style={styles.availabilityLink}><CalendarDays size={17} color={BRAND.primary} /><Text style={styles.availabilityText}>Editar mi disponibilidad semanal</Text></Pressable>}
           <View style={styles.counter}><CalendarDays size={18} color={BRAND.primary} /><Text style={styles.counterText}>{pending.length} solicitud{pending.length === 1 ? " pendiente" : "es pendientes"}</Text></View>
           {isEmployee && unread.length > 0 && <View style={styles.noticePanel}><View style={styles.noticeHeader}><BellRing size={16} color={BRAND.primary} /><Text style={styles.noticeTitle}>Avisos nuevos · {unread.length}</Text></View>{unread.slice(0, 3).map((notice) => <Pressable key={notice.id} onPress={() => void markRead(notice.id)} style={styles.noticeRow}><View style={{ flex: 1 }}><Text style={styles.noticeText}>{String(notice.titulo ?? "Aviso")}</Text><Text style={styles.noticeBody}>{String(notice.cuerpo ?? "")} · Toca para marcar leído</Text></View><Check size={16} color={BRAND.primaryDark} /></Pressable>)}</View>}
-          {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Escuchando cambios de Firestore…</Text></View> : error ? <View style={styles.state}><Text style={styles.errorText}>No se pudo leer la agenda: {error}</Text><Text style={styles.stateText}>Confirma que reglas, índices y Functions actuales estén desplegados.</Text></View> : sorted.length === 0 ? <View style={styles.empty}><CalendarDays size={28} color={BRAND.primary} /><Text style={styles.emptyTitle}>No hay citas todavía</Text><Text style={styles.emptyText}>Cuando un cliente reserve, aparecerá aquí sin actualizar la pantalla.</Text></View> : sorted.map((item) => <AppointmentCard key={item.id} item={item} currentUid={uid ?? ""} busy={busyId === item.id} isAdmin={isAdmin} isEmployee={isEmployee} onDecide={decide} onChangeState={changeServiceState} />)}
-          <Text style={styles.footer}>Los avisos visibles en esta versión se guardan dentro de Firebase y aparecen con la app abierta. No representan notificaciones push de Android/iOS.</Text>
+          {message ? <Text accessibilityRole="alert" style={[styles.message, isDark && { color: BRAND.onDarkText }]}>{message}</Text> : null}
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Escuchando cambios de Firestore…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && { color: BRAND.onDarkErrorText }]}>No se pudo leer la agenda: {error}</Text><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Confirma que reglas, índices y Functions actuales estén desplegados.</Text></View> : sorted.length === 0 ? <View style={styles.empty}><CalendarDays size={28} color={BRAND.primary} /><Text style={styles.emptyTitle}>No hay citas todavía</Text><Text style={styles.emptyText}>Cuando un cliente reserve, aparecerá aquí sin actualizar la pantalla.</Text></View> : sorted.map((item) => <AppointmentCard key={item.id} item={item} currentUid={uid ?? ""} busy={busyId === item.id} isAdmin={isAdmin} isEmployee={isEmployee} onDecide={decide} onChangeState={changeServiceState} />)}
+          <Text style={[styles.footer, isDark && { color: BRAND.onDarkMutedText }]}>Los avisos visibles en esta versión se guardan dentro de Firebase y aparecen con la app abierta. No representan notificaciones push de Android/iOS.</Text>
         </ScrollView>
       </ScreenContainer>
     </AuthGate>

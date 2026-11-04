@@ -8,9 +8,12 @@ import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, getAvailableEmployeeSlots, loadBusinesses, loadServices, reserveAppointment, subscribeClientAppointments, type AppointmentAvailability, type AppointmentRecord, type BusinessRecord, type EmployeeAvailability, type ServiceRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
+import { useThemeContext } from "@/lib/theme-provider";
 
 function ClientCatalogContent() {
   const { user, profile } = useAuthSession();
+  const { colorScheme } = useThemeContext();
+  const isDark = colorScheme === "dark";
   const uid = user?.uid;
   const [businesses, setBusinesses] = useState<BusinessRecord[]>([]);
   const [businessId, setBusinessId] = useState("");
@@ -146,14 +149,14 @@ function ClientCatalogContent() {
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.heading}><Text style={styles.eyebrow}>SERVICIOS DE EUFORIA</Text><Text style={styles.title}>Elige tu próximo servicio</Text><Text style={styles.subtitle}>Selecciona trabajo, profesional y solo uno de los horarios libres calculados en Firebase.</Text></View>
+          <View style={styles.heading}><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>SERVICIOS DE EUFORIA</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Elige tu próximo servicio</Text><Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Selecciona trabajo, profesional y solo uno de los horarios libres calculados en Firebase.</Text></View>
           {businesses.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((item) => <Pressable key={item.id} onPress={() => { setServices([]); setLoadedBusinessId(""); setBusinessId(item.id); }} style={[styles.businessChip, businessId === item.id && styles.businessChipActive]}><Text style={[styles.businessChipText, businessId === item.id && styles.businessChipTextActive]}>{item.nombre}</Text></Pressable>)}</ScrollView>}
           <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar servicio" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
           {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
-          {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}
-          {loadingBusinesses || loadingServices ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Cargando el catálogo real…</Text></View> : businesses.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title="Aún no hay negocios configurados" text="El administrador debe activar el negocio en Firestore para habilitar las reservas." /> : filteredServices.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title={services.length === 0 ? "No hay servicios publicados" : "No encontramos ese servicio"} text={services.length === 0 ? "El administrador debe configurar nombre, precio, duración y activo en Firebase." : "Prueba otra búsqueda."} /> : filteredServices.map((service) => <ServiceCard key={service.id} service={service} onBook={() => openBooking(service)} />)}
+          {error ? <Text accessibilityRole="alert" style={[styles.error, isDark && { color: BRAND.onDarkErrorText }]}>{error}</Text> : null}
+          {loadingBusinesses || loadingServices ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Cargando el catálogo real…</Text></View> : businesses.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title="Aún no hay negocios configurados" text="El administrador debe activar el negocio en Firestore para habilitar las reservas." /> : filteredServices.length === 0 ? <Empty icon={<ShoppingBag size={27} color={BRAND.primary} />} title={services.length === 0 ? "No hay servicios publicados" : "No encontramos ese servicio"} text={services.length === 0 ? "El administrador debe configurar nombre, precio, duración y activo en Firebase." : "Prueba otra búsqueda."} /> : filteredServices.map((service) => <ServiceCard key={service.id} service={service} onBook={() => openBooking(service)} />)}
 
-          <View style={styles.section}><Text style={styles.sectionTitle}>Tus citas</Text><Text style={styles.sectionHint}>Se actualizan en tiempo real.</Text></View>
+          <View style={styles.section}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Tus citas</Text><Text style={[styles.sectionHint, isDark && { color: BRAND.onDarkMutedText }]}>Se actualizan en tiempo real.</Text></View>
           {appointments.length === 0 ? <Empty icon={<CalendarDays size={22} color={BRAND.primary} />} title="Todavía no tienes citas" text="Cuando solicites un servicio, lo verás aquí." /> : appointments.map((item) => <ClientAppointment key={item.id} item={item} />)}
         </ScrollView>
         <Modal visible={Boolean(selectedService)} transparent animationType="slide" onRequestClose={() => setSelectedService(null)}>
