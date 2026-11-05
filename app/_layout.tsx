@@ -61,6 +61,7 @@ export default function RootLayout() {
               <Stack.Screen name="employee/availability" />
               <Stack.Screen name="admin/services" />
               <Stack.Screen name="change-password" />
+              <Stack.Screen name="notifications" />
               <Stack.Screen name="oauth/callback" />
             </Stack>
             <StatusBar style="auto" />

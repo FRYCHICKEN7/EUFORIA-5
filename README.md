@@ -10,7 +10,7 @@ En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino
 
 **No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales/variables Firebase se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
-Los avisos de nuevas solicitudes se guardan en Firestore y aparecen en la agenda de EUFORIA en tiempo real cuando la app escucha la cuenta. No son notificaciones push de Android/iOS: FCM y credenciales nativas no están integrados en esta fase.
+Los avisos de citas/servicios se guardan en Firestore para cliente, empleado y administración y el código incluye registro de Expo Push y envío desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar Rules/Functions manualmente; no se simuló una entrega.
 
 ## Roles y perfiles
 
@@ -23,9 +23,33 @@ Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuar
 1. En Firebase Console abre **Authentication → Users**, localiza la cuenta administradora y copia su UID actual.
 2. En Firestore crea/actualiza `users/{UID}` o `usuarios/{UID}` usando **exactamente ese UID como ID del documento**; no basta con un campo `id` dentro de otro documento.
 3. Asigna `email` igual al correo de Authentication y `role: "admin"` o `rol: "admin"` (también se admite `administrador`). Si mantienes documentos en ambas colecciones, usa el mismo rol en ambos. Un perfil con UID, correo o roles distintos no se vincula por email de manera automática.
-4. Inicia sesión seleccionando **Administrador**. Para más detalles, el UID mostrado por la app debe coincidir carácter por carácter con el UID de Authentication.
+4. En la pantalla de acceso toca el engranaje, elige **Administrador** e inicia sesión. Para más detalles, el UID vinculado debe coincidir carácter por carácter con el UID de Authentication.
 
 La cuenta administradora inicial que se había documentado es `euforiasalonhn@gmail.com`; verifica siempre el UID actual en Authentication, ya que no es fijo.
+
+### Acceso oculto y huella
+
+La pantalla inicial muestra el acceso de cliente. El selector de administración/empleado aparece al tocar el engranaje. Esto solo cambia la opción visual del formulario: el rol efectivo sigue leyéndose y validándose contra el perfil Firestore vinculado al UID; el selector no concede permisos.
+
+Después de autenticar por correo/contraseña, cada perfil puede activar biometría en su dispositivo si tiene huella/Face ID configurados. La preferencia se almacena de forma segura por UID y pide la biometría para desbloquear la sesión Firebase ya persistida, incluso cuando se vuelve a EUFORIA desde segundo plano. No almacena la contraseña ni los datos biométricos, y la huella **no reemplaza** el login de Firebase después de cerrar sesión; en ese caso se vuelve a ingresar con correo y contraseña.
+
+### WhatsApp manual
+
+En la tarjeta de un cliente con número válido, administración puede tocar **WhatsApp**. Para un número hondureño de ocho dígitos se abre `https://wa.me/504XXXXXXXX`; si ya contiene `504` se conserva, y un número internacional con `+` se normaliza a solo dígitos. El botón abre el chat para que la persona redacte y decida enviar; no conecta WhatsApp Business, no manda mensajes automáticamente y no crea mensajes preescritos.
+
+### Notificaciones por cuenta y preparación Expo Push
+
+Cliente, empleado y administrador tienen campana común, centro personal en tiempo real y tarjeta para autorizar notificaciones. El permiso se solicita solo en dispositivo móvil nativo; cada token se guarda en `usuarios/{uid}/dispositivos/{deviceId}` y cada registro nuevo en `notificaciones` activa la Function `enviarPushExpo`. La Function solicita a Expo Push entregar el título/cuerpo existente al dispositivo destinatario y deshabilita tokens que Expo informa como no registrados; un ticket aceptado no equivale por sí solo a confirmación de entrega al teléfono.
+
+Para recibir avisos con la app cerrada, una persona administradora del proyecto debe completar **manualmente** estos pasos:
+
+1. Asociar esta app con un proyecto Expo/EAS y obtener el `projectId`.
+2. Definir `EXPO_PUBLIC_EAS_PROJECT_ID=<projectId>` en el entorno de build EAS; `app.config.ts` lo expone como `extra.eas.projectId` para obtener tokens Expo Push.
+3. Configurar las credenciales push del proyecto EAS: Firebase Cloud Messaging V1 para Android y una clave APNs válida para iOS. Si el build requiere `google-services.json` o `GoogleService-Info.plist`, colócalos localmente en la raíz del proyecto o como archivos de credencial de build; están ignorados por Git y no se incluyen en el ZIP.
+4. Generar un nuevo development/release build nativo con el plugin `expo-notifications`; Expo Go/Web Preview no validan la recepción remota nativa.
+5. Revisar y desplegar las Rules y Functions nuevas en Firebase según la sección de despliegue manual. Después, autorizar permisos en cada teléfono y comprobar tickets/recepción con cuentas de cliente, empleado y administración.
+
+Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado pendiente y la bandeja Firestore continúa siendo la fuente de avisos dentro de EUFORIA. No se desplegaron reglas ni funciones en esta tarea.
 
 ### Alta segura de empleado
 
@@ -116,11 +140,12 @@ pnpm install
 pnpm run build
 ```
 
-Las últimas verificaciones locales: TypeScript, lint sin errores, 35 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló, y Expo pudo exportar bundle Android. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. La comprobación final de Rules usa únicamente el emulador local. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
+Las verificaciones locales de esta actualización: TypeScript y lint sin errores, 39 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló y Expo exportó bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni verifican notificaciones/biometría en un dispositivo. Las Rules nuevas iniciaron en Firestore Emulator con el proyecto `demo-euforia` (sin conexión a Firebase real). Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
 
 ## Pendientes fuera de esta fase
 
-- Desplegar Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado.
+- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado; la Function nueva `enviarPushExpo` tampoco se ha desplegado.
+- Asociar proyecto EAS, configurar FCM V1/APNs, credenciales nativas y build firmado para que push llegue al teléfono con la app cerrada.
 - Crear negocio/horarios/servicios reales; promover desde administración las cuentas de empleados registradas como clientes.
-- FCM push, gestión de feriados, descansos múltiples y disponibilidad variable por fecha, historial integral, cancelación/reprogramación completa y exportación.
-- Build EAS/APK firmado y credenciales nativas.
+- Gestión de feriados, descansos múltiples y disponibilidad variable por fecha, historial integral, cancelación/reprogramación completa y exportación.
+- Probar biometría, permisos push y enlaces en un dispositivo físico después del build nativo; el preview web no verifica módulos nativos.

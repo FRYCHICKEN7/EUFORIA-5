@@ -100,6 +100,22 @@ service cloud.firestore {
         && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
         && request.resource.data.createdAt == resource.data.createdAt;
       allow delete: if false;
+
+      match /dispositivos/{deviceId} {
+        allow get, list: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['token', 'provider', 'platform', 'enabled', 'updatedAt'])
+          && request.resource.data.keys().hasAll(['token', 'provider', 'platform', 'enabled', 'updatedAt'])
+          && request.resource.data.token is string
+          && request.resource.data.token.size() > 0
+          && request.resource.data.token.size() <= 4096
+          && request.resource.data.provider == 'expo'
+          && request.resource.data.platform in ['android', 'ios']
+          && request.resource.data.enabled is bool
+          && request.resource.data.updatedAt == request.time;
+        allow delete: if signedIn() && request.auth.uid == uid;
+      }
     }
 
     match /users/{uid} {

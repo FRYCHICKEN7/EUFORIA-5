@@ -19,6 +19,8 @@ No desplegar a Firebase real, no probar haciendo escrituras en producción, no h
 - `app/client/catalog.tsx`: servicios reales, duración legible y consulta server-side de empleados/slots por negocio, servicio y fecha; reserva transaccional con refresh si el slot queda ocupado.
 - `app/admin/services.tsx`, `app/(tabs)/index.tsx`: CRUD administrativo de servicios y resumen de citas completadas, promedio real y conteo por empleado/servicio.
 - `lib/roles.ts`, `lib/appointments.ts`, `lib/profiles.ts`: normalización segura de perfiles y roles, listeners, consultas y callables.
+- `lib/whatsapp.ts`, `lib/biometrics.ts`, `lib/device-notifications.ts`: normalización `wa.me`, enrolamiento/validación biométrica mediante SecureStore por UID y registro/desregistro de tokens Expo Push por dispositivo.
+- `app/notifications.tsx`, `components/notification-setup-card.tsx`: campana/bandeja por rol, acciones de lectura, permiso push nativo y cierre de sesión/cambio de cuenta.
 - `functions/src/roles.ts`, `functions/src/availability.ts`, `functions/src/index.ts`: reconciliación Admin SDK de perfiles/roles, cálculo de huecos por fecha, reserva y aprobación transaccionales, avisos in-app, política de disponibilidad, control de citas, tiempos reales y expiración de holds.
 - `firestore.rules`: denegación por defecto, lectura admin/propietario/profesional asignado, creación propia con rol cliente, lectura propia de perfil, catálogo y disponibilidad pública solo por medios aprobados; roles, turnos y estados sensibles no se cambian directamente desde cliente.
 - `firestore.indexes.json`: consultas de conflictos de cita, agendas cliente/empleado/admin, holds que expiran, selector de profesionales disponibles y avisos por destinatario/fecha.
@@ -48,3 +50,11 @@ No desplegar a Firebase real, no probar haciendo escrituras en producción, no h
 ## Entorno y validación
 
 Mantener Expo/Metro en 8081 y API del starter en 3000; no reemplazar el starter. Validar TypeScript, lint, pruebas unitarias de slots/roles, build de Functions, sintaxis Rules con emulador local y bundle Android Expo. La base administrada y Firebase producción son compartidos: no escribir datos al probar. Un agente revisor de solo lectura traza UI, Rules, Functions y requisitos antes del checkpoint. Guardar en `main` remoto canónico Manus; no desplegar Firebase ni publicar sin autorización.
+
+## Ampliación acordada: acceso, contacto y notificaciones
+
+- En el formulario inicial se muestra solo el inicio de sesión de cliente. Un icono de engranaje revela/oculta el selector de administrador y empleado, sin cambiar las comprobaciones de rol del perfil Firestore.
+- Cada tarjeta de cliente ofrece abrir su chat de WhatsApp usando un vínculo `https://wa.me/504XXXXXXXX`; se normaliza el número hondureño de ocho dígitos a prefijo `504`, se preservan números internacionales y no se envían mensajes automáticamente ni se integra WhatsApp Business API.
+- Todos los roles pueden consultar su bandeja personal en tiempo real y registrar el token Expo Push de su dispositivo con permiso del sistema. Functions transmite los documentos de notificación a Expo Push; la entrega fuera de la app requiere un proyecto EAS y credenciales de notificaciones Android/iOS. No desplegar reglas/Functions ni afirmar notificaciones remotas listas hasta configurar y desplegar estos recursos manualmente.
+- La huella/biometría se ofrece para cada rol, opcionalmente por dispositivo. Tras autenticar el perfil con Firebase, el sistema seguro del teléfono guarda solo el UID enrolado; en inicios posteriores protege la sesión Firebase persistida con biometría. Nunca se guarda la contraseña: cerrar la sesión Firebase exige volver a usar correo/contraseña.
+- El encabezado común enlaza la campana a una bandeja accesible para cliente, empleado y administración; la pantalla de avisos administrativos explica los botones directos a WhatsApp y el estado real de registro push.

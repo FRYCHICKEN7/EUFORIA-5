@@ -1,11 +1,26 @@
+import { useEffect } from "react";
 import { Bell, ChevronDown } from "lucide-react-native";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import { router } from "expo-router";
 import { BRAND } from "@/constants/brand";
+import { useAuthSession } from "@/lib/auth-session";
+import { bootstrapDeviceNotifications } from "@/lib/device-notifications";
 import { useThemeContext } from "@/lib/theme-provider";
 
 export function AppHeader({ name = "tu cuenta", onNotifications }: { name?: string; onNotifications?: () => void }) {
   const { colorScheme } = useThemeContext();
+  const { user, profile, loading } = useAuthSession();
+  const hasProfile = Boolean(profile);
   const isDark = colorScheme === "dark";
+
+  useEffect(() => {
+    if (!loading && user?.uid && hasProfile) void bootstrapDeviceNotifications(user.uid);
+  }, [user?.uid, loading, hasProfile]);
+
+  const openNotifications = () => {
+    if (onNotifications) onNotifications();
+    else router.push("/notifications");
+  };
 
   return (
     <View style={styles.container}>
@@ -19,9 +34,8 @@ export function AppHeader({ name = "tu cuenta", onNotifications }: { name?: stri
           </View>
         </View>
       </View>
-      <Pressable accessibilityLabel="Notificaciones" onPress={onNotifications} style={styles.bell}>
+      <Pressable accessibilityRole="button" accessibilityLabel="Abrir centro de notificaciones" onPress={openNotifications} style={styles.bell}>
         <Bell size={21} color={BRAND.wine} strokeWidth={2} />
-        <View style={styles.dot} />
       </Pressable>
     </View>
   );
@@ -37,5 +51,4 @@ const styles = StyleSheet.create({
   greetingRow: { flexDirection: "row", alignItems: "center", gap: 2, marginTop: 2 },
   greeting: { color: BRAND.muted, fontSize: 13, fontWeight: "600" },
   bell: { width: 43, height: 43, borderRadius: 22, backgroundColor: BRAND.surface, alignItems: "center", justifyContent: "center", shadowColor: BRAND.shadow, shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.08, shadowRadius: 8, elevation: 2 },
-  dot: { width: 7, height: 7, borderRadius: 4, backgroundColor: BRAND.primary, position: "absolute", right: 10, top: 9, borderWidth: 1.5, borderColor: BRAND.surface },
 });

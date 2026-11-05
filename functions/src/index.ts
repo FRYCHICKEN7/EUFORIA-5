@@ -2,6 +2,7 @@ import { getApp, getApps, initializeApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { FieldValue, getFirestore, Timestamp, type DocumentData, type Transaction } from "firebase-admin/firestore";
 import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/https";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 import {
   computeAvailableSlots,
@@ -62,6 +63,19 @@ async function loadProfileInTransaction(transaction: Transaction, uid: string) {
   const sources = snapshots.map((snapshot) => snapshot.exists ? snapshot.data() ?? {} : null);
   const profile = mergeProfileDocuments(sources, uid);
   return { profile, role: roleFromProfiles(sources), refs, snapshots, sources };
+}
+
+async function adminRecipientUids(transaction: Transaction): Promise<string[]> {
+  const adminRoles = ["admin", "administrador"];
+  const snapshots = await Promise.all([
+    transaction.get(db.collection("users").where("role", "in", adminRoles).limit(100)),
+    transaction.get(db.collection("users").where("rol", "in", adminRoles).limit(100)),
+    transaction.get(db.collection("usuarios").where("role", "in", adminRoles).limit(100)),
+    transaction.get(db.collection("usuarios").where("rol", "in", adminRoles).limit(100)),
+  ]);
+  const candidates = new Set(snapshots.flatMap((snapshot) => snapshot.docs.map((item) => item.id)));
+  const profiles = await Promise.all([...candidates].map(async (uid) => ({ uid, ...(await loadProfileInTransaction(transaction, uid)) })));
+  return profiles.flatMap((item) => item.profile && item.role === "admin" ? [item.uid] : []);
 }
 
 function clockAndDate(millis: number) {
@@ -486,6 +500,7 @@ export const reservarCita = onCall<ReserveInput>(async (request) => {
       createdAt: Timestamp.fromMillis(nowMs),
       ...(notes ? { notas: notes } : {}),
     };
+    const adminUids = await adminRecipientUids(transaction);
     transaction.set(appointmentRef, booking);
     transaction.set(employeeNoticeRef, {
       destinatarioId: employeeUid,
@@ -497,6 +512,18 @@ export const reservarCita = onCall<ReserveInput>(async (request) => {
       createdAt: Timestamp.fromMillis(nowMs),
       leida: false,
     });
+    for (const adminUid of adminUids) {
+      transaction.set(db.collection("notificaciones").doc(), {
+        destinatarioId: adminUid,
+        tipo: "nueva_solicitud_cita",
+        titulo: "Nueva solicitud de cita",
+        cuerpo: `${String(customerProfile.name ?? "Un cliente")} solicita ${String(service.nombre ?? "un servicio")} con ${staffName}.`,
+        citaId: appointmentRef.id,
+        negocioId,
+        createdAt: Timestamp.fromMillis(nowMs),
+        leida: false,
+      });
+    }
   });
   return { citaId: appointmentRef.id, estado: "hold", holdExpiresAt: holdExpiresAt.toDate().toISOString() };
 });
@@ -564,24 +591,48 @@ async function transitionAssignedAppointment(request: CallableRequest<DecisionIn
     if (!appointmentSnapshot.exists) throw new HttpsError("not-found", "La cita no existe.");
     const appointment = appointmentSnapshot.data() ?? {};
     if (appointment.empleadoUid !== uid && appointment.empleadoId !== uid) throw new HttpsError("permission-denied", "Esta cita no está asignada a tu perfil.");
+    let elapsedMs = 0;
     if (action === "start") {
       if (appointment.estado !== "confirmada") throw new HttpsError("failed-precondition", "Solo puedes iniciar una cita confirmada.");
-      transaction.update(appointmentRef, { estado: "en_curso", startedAt: now, iniciadoPor: uid });
-      return;
+    } else {
+      if (appointment.estado !== "en_curso") throw new HttpsError("failed-precondition", "Solo puedes finalizar un servicio que ya inició.");
+      const startedAt = timestampMillis(appointment.startedAt);
+      if (startedAt === null || startedAt > now.toMillis()) throw new HttpsError("failed-precondition", "La cita no tiene una hora de inicio válida.");
+      elapsedMs = now.toMillis() - startedAt;
+      actualMinutes = Math.round((elapsedMs / 60_000) * 100) / 100;
+      if (actualMinutes <= 0) throw new HttpsError("failed-precondition", "Espera al menos un minuto antes de finalizar el servicio.");
     }
-    if (appointment.estado !== "en_curso") throw new HttpsError("failed-precondition", "Solo puedes finalizar un servicio que ya inició.");
-    const startedAt = timestampMillis(appointment.startedAt);
-    if (startedAt === null || startedAt > now.toMillis()) throw new HttpsError("failed-precondition", "La cita no tiene una hora de inicio válida.");
-    const elapsedMs = now.toMillis() - startedAt;
-    actualMinutes = Math.round((elapsedMs / 60_000) * 100) / 100;
-    if (actualMinutes <= 0) throw new HttpsError("failed-precondition", "Espera al menos un minuto antes de finalizar el servicio.");
-    transaction.update(appointmentRef, {
+
+    const adminUids = await adminRecipientUids(transaction);
+    const isStart = action === "start";
+    transaction.update(appointmentRef, isStart ? {
+      estado: "en_curso",
+      startedAt: now,
+      iniciadoPor: uid,
+    } : {
       estado: "completada",
       completedAt: now,
       finalizadoPor: uid,
       duracionRealMin: actualMinutes,
       duracionRealSeg: Math.round(elapsedMs / 1000),
     });
+    const title = isStart ? "Servicio iniciado" : "Servicio finalizado";
+    const body = isStart
+      ? `${String(appointment.servicioNombre ?? "Tu servicio")} ya está en curso.`
+      : `${String(appointment.servicioNombre ?? "Tu servicio")} terminó. Gracias por elegir EUFORIA.`;
+    const recipients = new Set([String(appointment.clienteId ?? ""), ...adminUids].filter(Boolean));
+    for (const recipientUid of recipients) {
+      transaction.set(db.collection("notificaciones").doc(), {
+        destinatarioId: recipientUid,
+        tipo: isStart ? "servicio_iniciado" : "servicio_finalizado",
+        titulo: recipientUid === appointment.clienteId ? title : `${title} · ${String(appointment.clienteNombre ?? "Cliente")}`,
+        cuerpo: body,
+        citaId,
+        negocioId: String(appointment.negocioId ?? ""),
+        createdAt: now,
+        leida: false,
+      });
+    }
   });
   return action === "finish" ? { ok: true as const, duracionRealMin: actualMinutes } : { ok: true as const };
 }
@@ -612,4 +663,68 @@ export const registrarAviso = onCall<{ destinatarioId: string; titulo: string; c
   const cuerpo = requiredString(request.data?.cuerpo, "Mensaje", 1000);
   await db.collection("notificaciones").add({ destinatarioId, titulo, cuerpo, createdAt: Timestamp.now(), leida: false });
   return { saved: true as const };
+});
+
+export const enviarPushExpo = onDocumentCreated({ document: "notificaciones/{notificationId}", retry: true }, async (event) => {
+  const notificationRef = event.data?.ref;
+  const notice = event.data?.data();
+  const uid = typeof notice?.destinatarioId === "string" ? notice.destinatarioId : "";
+  if (!notificationRef || !uid) return;
+
+  const current = await notificationRef.get();
+  if (current.data()?.pushStatus === "enviado") return;
+  const deviceSnapshot = await db.collection("usuarios").doc(uid).collection("dispositivos")
+    .where("enabled", "==", true)
+    .get();
+  const devices = deviceSnapshot.docs.filter((item) => {
+    const token = item.get("token");
+    return typeof token === "string" && /^(Expo|Exponent)PushToken\[.+\]$/.test(token);
+  });
+  if (devices.length === 0) {
+    await notificationRef.update({ pushStatus: "sin_dispositivo", pushProcessedAt: Timestamp.now() });
+    return;
+  }
+
+  await notificationRef.update({ pushStatus: "enviando" });
+  const title = typeof notice?.titulo === "string" ? notice.titulo.slice(0, 120) : "Aviso EUFORIA";
+  const body = typeof notice?.cuerpo === "string" ? notice.cuerpo.slice(0, 1000) : "Tienes una actualización en EUFORIA.";
+  let ticketCount = 0;
+  const invalidDevices: FirebaseFirestore.DocumentReference[] = [];
+  try {
+    for (let offset = 0; offset < devices.length; offset += 100) {
+      const batch = devices.slice(offset, offset + 100);
+      const response = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: { Accept: "application/json", "Accept-encoding": "gzip, deflate", "Content-Type": "application/json" },
+        body: JSON.stringify(batch.map((device) => ({
+          to: device.get("token"),
+          title,
+          body,
+          sound: "default",
+          channelId: "euforia",
+          data: { notificationId: notificationRef.id, ...(typeof notice?.citaId === "string" ? { citaId: notice.citaId } : {}) },
+        }))),
+      });
+      if (!response.ok) throw new Error(`Expo Push respondió HTTP ${response.status}.`);
+      const payload = await response.json() as { data?: Array<{ status?: string; details?: { error?: string }; message?: string }> };
+      const tickets = payload.data ?? [];
+      ticketCount += tickets.filter((ticket) => ticket.status === "ok").length;
+      tickets.forEach((ticket, index) => {
+        if (ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered") {
+          invalidDevices.push(batch[index]!.ref);
+        }
+        if (ticket.status === "error" && ticket.details?.error !== "DeviceNotRegistered") {
+          console.warn("Expo Push rechazó un aviso.", ticket.details?.error ?? ticket.message ?? "unknown");
+        }
+      });
+    }
+    const cleanup = db.batch();
+    invalidDevices.forEach((reference) => cleanup.update(reference, { enabled: false, updatedAt: Timestamp.now() }));
+    if (invalidDevices.length) await cleanup.commit();
+    await notificationRef.update({ pushStatus: ticketCount > 0 ? "enviado" : "sin_entrega", pushTicketCount: ticketCount, pushProcessedAt: Timestamp.now() });
+  } catch (error) {
+    await notificationRef.update({ pushStatus: "error", pushProcessedAt: Timestamp.now() });
+    console.error("No se pudo entregar el aviso a Expo Push.", error);
+    throw error;
+  }
 });

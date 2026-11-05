@@ -1,6 +1,7 @@
 // Load environment variables with proper priority (system > .env)
 import "./scripts/load-env.js";
 import type { ExpoConfig } from "expo/config";
+import { existsSync } from "node:fs";
 
 // Bundle ID format: space.manus.<project_name_dots>.<timestamp>
 // e.g., "my-app" created at 2024-01-15 10:30:45 -> "space.manus.my.app.t20240115103045"
@@ -58,13 +59,19 @@ const publicRuntime = {
     "",
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
 };
+const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
+const googleServicesJson = "./google-services.json";
+const googleServiceInfoPlist = "./GoogleService-Info.plist";
 
 const config: ExpoConfig & { logoUrl: string } = {
   logoUrl: "https://files.manuscdn.com/user_upload_by_module/session_file/310519664057458872/JuXtEODzBUqJVvkM.png",
   name: env.appName,
   slug: env.appSlug,
   version: "1.0.0",
-  extra: publicRuntime,
+  extra: {
+    ...publicRuntime,
+    ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
+  },
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: env.scheme,
@@ -72,11 +79,13 @@ const config: ExpoConfig & { logoUrl: string } = {
   ios: {
     supportsTablet: true,
     bundleIdentifier: env.iosBundleId,
+    ...(existsSync(googleServiceInfoPlist) ? { googleServicesFile: googleServiceInfoPlist } : {}),
     "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
   },
   android: {
+    ...(existsSync(googleServicesJson) ? { googleServicesFile: googleServicesJson } : {}),
     adaptiveIcon: {
       backgroundColor: "#E6F4FE",
       foregroundImage: "./assets/images/android-icon-foreground.png",
@@ -108,6 +117,8 @@ const config: ExpoConfig & { logoUrl: string } = {
   plugins: [
     "expo-asset",
     "expo-router",
+    ["expo-local-authentication", { faceIDPermission: "EUFORIA usa Face ID para desbloquear de forma segura tu sesión guardada." }],
+    ["expo-notifications", { defaultChannel: "euforia", color: "#D85C7A" }],
     [
       "expo-audio",
       {

@@ -8,11 +8,12 @@ import { hasProfileRole } from "@/lib/roles";
 type AllowedRole = "cliente" | "empleado" | "administrador" | "admin";
 
 export function AuthGate({ allowedRoles, children }: PropsWithChildren<{ allowedRoles: AllowedRole[] }>) {
-  const { user, profile, loading } = useAuthSession();
+  const { user, profile, loading, isBiometricLocked } = useAuthSession();
   if (loading) {
     return <View style={styles.loading}><ActivityIndicator color={BRAND.primary} /><Text style={styles.text}>Verificando acceso…</Text></View>;
   }
   if (!user || !profile) return <Redirect href="/auth" />;
+  if (isBiometricLocked) return <Redirect href="/auth" />;
   if (!hasProfileRole(profile, allowedRoles)) return <Redirect href="/" />;
   return <>{children}</>;
 }
