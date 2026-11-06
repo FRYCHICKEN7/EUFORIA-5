@@ -41,7 +41,8 @@ function AvailabilityContent() {
         setAvailable(data.disponible);
         setDays(data.dias);
       }).catch((reason) => {
-        if (active) setError(reason instanceof Error ? reason.message : "No se pudo cargar tu horario.");
+        console.warn("No se pudo cargar el horario del empleado.", reason);
+        if (active) setError("No pudimos cargar tu horario. Intenta de nuevo.");
       }).finally(() => { if (active) setLoading(false); });
     }, 0);
     return () => { active = false; clearTimeout(timer); };
@@ -55,8 +56,8 @@ function AvailabilityContent() {
       try {
         const { loadBusinesses } = await import("@/lib/appointments");
         const businesses = await loadBusinesses();
-        if (active) setBusinessName(businesses.find((item) => item.id === businessId)?.nombre ?? businessId);
-      } catch { if (active) setBusinessName(businessId); }
+        if (active) setBusinessName(businesses.find((item) => item.id === businessId)?.nombre ?? "Negocio EUFORIA");
+      } catch (reason) { console.warn("No se pudo cargar el nombre del negocio.", reason); if (active) setBusinessName("Negocio EUFORIA"); }
     }, 0);
     return () => { active = false; clearTimeout(timer); unsubscribe?.(); };
   }, [businessId]);
@@ -73,7 +74,8 @@ function AvailabilityContent() {
       setMessage(result.disponible ? "Horario guardado. Ya apareces como disponible en las franjas que caben." : "Horario guardado. Tu perfil no aparecerá disponible para nuevas reservas.");
     } catch (reason) {
       const code = (reason as { code?: string })?.code ?? "";
-      setError(code.includes("permission-denied") ? "No se autorizó este cambio. Solo el empleado aprobado puede editar su propio horario." : reason instanceof Error ? reason.message : "No se pudo guardar el horario. Comprueba Cloud Functions.");
+      console.warn("No se pudo guardar el horario del empleado.", reason);
+      setError(code.includes("permission-denied") ? "No tienes autorización para cambiar este horario." : "No pudimos guardar el horario. Intenta de nuevo.");
     } finally {
       setSaving(false);
     }

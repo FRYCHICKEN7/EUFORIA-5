@@ -7,7 +7,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
-import { appointmentMillis, decideAppointment, finishService, startService, subscribeAdminAppointments, subscribeEmployeeAppointments, type AppointmentRecord } from "@/lib/appointments";
+import { appointmentMillis, appointmentStatusLabel, decideAppointment, finishService, startService, subscribeAdminAppointments, subscribeEmployeeAppointments, type AppointmentRecord } from "@/lib/appointments";
 import { markNotificationRead, subscribeNotifications, type AppNotification } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
 import { useThemeContext } from "@/lib/theme-provider";
@@ -41,14 +41,15 @@ function ScheduleContent() {
           setError("");
           setLoading(false);
         };
-        const receiveError = (reason: Error) => { if (active) { setError(reason.message); setLoading(false); } };
+        const receiveError = (reason: Error) => { console.warn("No se pudo cargar la agenda.", reason); if (active) { setError("No pudimos cargar la agenda. Intenta de nuevo."); setLoading(false); } };
         stopAppointments = isAdmin
           ? subscribeAdminAppointments(receiveAppointments, receiveError)
           : subscribeEmployeeAppointments(uid, receiveAppointments, receiveError);
         if (isEmployee) stopNotifications = subscribeNotifications(uid, (items) => { if (active) setNotifications(items); }, receiveError);
       } catch (reason) {
         if (active) {
-          setError(reason instanceof Error ? reason.message : "No se pudo abrir la agenda.");
+          console.warn("No se pudo abrir la agenda.", reason);
+          setError("No pudimos cargar la agenda. Intenta de nuevo.");
           setLoading(false);
         }
       }
@@ -68,7 +69,8 @@ function ScheduleContent() {
       setMessage(action === "aprobarCita" ? "Cita confirmada; el cliente ya la ve en su agenda." : "Solicitud rechazada y cliente avisado.");
     } catch (reason) {
       const code = (reason as { code?: string })?.code ?? "";
-      setMessage(code.includes("permission-denied") ? "Tu perfil no está autorizado para decidir esta cita." : code.includes("deadline-exceeded") ? "La reserva temporal venció antes de aprobarse." : "No se pudo actualizar. Revisa que la Function esté desplegada.");
+      console.warn("No se pudo actualizar la cita.", reason);
+      setMessage(code.includes("permission-denied") ? "No tienes autorización para actualizar esta cita." : code.includes("deadline-exceeded") ? "La solicitud venció antes de confirmarse." : "No pudimos actualizar la cita. Intenta de nuevo.");
     } finally { setBusyId(""); }
   };
 
@@ -79,18 +81,19 @@ function ScheduleContent() {
       if (action === "start") await startService(item.id);
       else {
         const result = await finishService(item.id);
-        setMessage(`Servicio finalizado. Duración registrada por Firebase: ${formatMinutes(result.duracionRealMin)}.`);
+        setMessage(`Servicio finalizado. Tiempo registrado: ${formatMinutes(result.duracionRealMin)}.`);
       }
-      if (action === "start") setMessage("Inicio de servicio registrado con la hora del servidor.");
+      if (action === "start") setMessage("Inicio de servicio registrado.");
     } catch (reason) {
       const code = (reason as { code?: string })?.code ?? "";
-      setMessage(code.includes("permission-denied") ? "Solo el empleado asignado puede marcar el inicio o final." : "No se pudo cambiar el estado. Comprueba la Function y el estado actual de la cita.");
+      console.warn("No se pudo cambiar el estado del servicio.", reason);
+      setMessage(code.includes("permission-denied") ? "Solo la persona asignada puede marcar el inicio o el final." : "No pudimos actualizar el servicio. Intenta de nuevo.");
     } finally { setBusyId(""); }
   };
 
   const markRead = async (id: string) => {
     try { await markNotificationRead(id); }
-    catch { setMessage("No se pudo marcar el aviso como leído; revisa las reglas desplegadas."); }
+    catch (reason) { console.warn("No se pudo marcar el aviso como leído.", reason); setMessage("No pudimos actualizar el aviso. Intenta de nuevo."); }
   };
 
   return (
@@ -103,8 +106,8 @@ function ScheduleContent() {
           <View style={styles.counter}><CalendarDays size={18} color={BRAND.primary} /><Text style={styles.counterText}>{pending.length} solicitud{pending.length === 1 ? " pendiente" : "es pendientes"}</Text></View>
           {isEmployee && unread.length > 0 && <View style={styles.noticePanel}><View style={styles.noticeHeader}><BellRing size={16} color={BRAND.primary} /><Text style={styles.noticeTitle}>Avisos nuevos · {unread.length}</Text></View>{unread.slice(0, 3).map((notice) => <Pressable key={notice.id} onPress={() => void markRead(notice.id)} style={styles.noticeRow}><View style={{ flex: 1 }}><Text style={styles.noticeText}>{String(notice.titulo ?? "Aviso")}</Text><Text style={styles.noticeBody}>{String(notice.cuerpo ?? "")} · Toca para marcar leído</Text></View><Check size={16} color={BRAND.primaryDark} /></Pressable>)}</View>}
           {message ? <Text accessibilityRole="alert" style={[styles.message, isDark && { color: BRAND.onDarkText }]}>{message}</Text> : null}
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Escuchando cambios de Firestore…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && { color: BRAND.onDarkErrorText }]}>No se pudo leer la agenda: {error}</Text><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Confirma que reglas, índices y Functions actuales estén desplegados.</Text></View> : sorted.length === 0 ? <View style={styles.empty}><CalendarDays size={28} color={BRAND.primary} /><Text style={styles.emptyTitle}>No hay citas todavía</Text><Text style={styles.emptyText}>Cuando un cliente reserve, aparecerá aquí sin actualizar la pantalla.</Text></View> : sorted.map((item) => <AppointmentCard key={item.id} item={item} currentUid={uid ?? ""} busy={busyId === item.id} isAdmin={isAdmin} isEmployee={isEmployee} onDecide={decide} onChangeState={changeServiceState} />)}
-          <Text style={[styles.footer, isDark && { color: BRAND.onDarkMutedText }]}>Los avisos de Firebase aparecen en tu bandeja en tiempo real. Las notificaciones push a Android/iOS requieren el proyecto EAS y credenciales nativas configuradas.</Text>
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Actualizando tu agenda…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && { color: BRAND.onDarkErrorText }]}>{error}</Text><Text style={[styles.stateText, isDark && { color: BRAND.onDarkMutedText }]}>Intenta de nuevo en unos momentos.</Text></View> : sorted.length === 0 ? <View style={styles.empty}><CalendarDays size={28} color={BRAND.primary} /><Text style={styles.emptyTitle}>No hay citas todavía</Text><Text style={styles.emptyText}>Cuando un cliente reserve, aparecerá aquí sin actualizar la pantalla.</Text></View> : sorted.map((item) => <AppointmentCard key={item.id} item={item} currentUid={uid ?? ""} busy={busyId === item.id} isAdmin={isAdmin} isEmployee={isEmployee} onDecide={decide} onChangeState={changeServiceState} />)}
+          <Text style={[styles.footer, isDark && { color: BRAND.onDarkMutedText }]}>Los avisos de citas y servicios aparecerán aquí al instante.</Text>
         </ScrollView>
       </ScreenContainer>
     </AuthGate>
@@ -123,7 +126,7 @@ function AppointmentCard({ item, currentUid, busy, isAdmin, isEmployee, onDecide
   const canFinish = assignedEmployee && item.estado === "en_curso";
   return (
     <View style={styles.card}>
-      <View style={styles.cardTop}><Text numberOfLines={1} style={styles.client}>{clientName}</Text><Text style={styles.badge}>{item.estado.replaceAll("_", " ")}</Text></View>
+      <View style={styles.cardTop}><Text numberOfLines={1} style={styles.client}>{clientName}</Text><Text style={styles.badge}>{appointmentStatusLabel(item.estado)}</Text></View>
       <Text style={styles.service}>{String(item.servicioNombre ?? "Servicio")}{item.empleadoNombre ? ` · ${String(item.empleadoNombre)}` : ""}</Text>
       {item.clienteTelefono ? <Text style={styles.contact}>Tel. {String(item.clienteTelefono)}</Text> : null}
       <Text style={styles.date}>{when}</Text>

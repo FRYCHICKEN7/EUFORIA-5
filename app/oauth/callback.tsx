@@ -192,13 +192,13 @@ export default function OAuthCallback() {
         } else {
           console.error("[OAuth] No session token in result");
           setStatus("error");
-          setErrorMessage("No session token received");
+          setErrorMessage("No pudimos verificar tu acceso. Intenta de nuevo.");
         }
       } catch (error) {
-        console.error("[OAuth] Callback error");
+        console.error("[OAuth] Callback error", error);
         setStatus("error");
         setErrorMessage(
-          error instanceof Error ? error.message : "Failed to complete authentication",
+          "No pudimos completar el acceso. Intenta de nuevo.",
         );
       }
     };
@@ -213,24 +213,24 @@ export default function OAuthCallback() {
           <>
             <ActivityIndicator size="large" />
             <Text className="mt-4 text-base leading-6 text-center text-foreground">
-              Completing authentication...
+              Comprobando tu acceso…
             </Text>
           </>
         )}
         {status === "success" && (
           <>
             <Text className="text-base leading-6 text-center text-foreground">
-              Authentication successful!
+              Acceso confirmado
             </Text>
             <Text className="text-base leading-6 text-center text-foreground">
-              Redirecting...
+              Abriendo tu espacio…
             </Text>
           </>
         )}
         {status === "error" && (
           <>
             <Text className="mb-2 text-xl font-bold leading-7 text-error">
-              Authentication failed
+              No pudimos iniciar sesión
             </Text>
             <Text className="text-base leading-6 text-center text-foreground">
               {errorMessage}

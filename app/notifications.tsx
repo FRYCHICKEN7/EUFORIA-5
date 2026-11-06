@@ -32,10 +32,8 @@ function NotificationCenter() {
       setLoading(false);
       setError("");
     }, (reason) => {
-      const code = (reason as Error & { code?: string }).code ?? "";
-      setError(code === "permission-denied"
-        ? "Firestore no permite leer tu bandeja todavía. Despliega manualmente las Rules actualizadas."
-        : "No se pudo cargar la bandeja de notificaciones.");
+      console.warn("No se pudo cargar la bandeja de avisos.", reason);
+      setError("No pudimos cargar tus avisos. Intenta de nuevo.");
       setLoading(false);
     });
     return unsubscribe;
@@ -45,7 +43,7 @@ function NotificationCenter() {
     if (item.leida || busyId) return;
     setBusyId(item.id);
     try { await markNotificationRead(item.id); }
-    catch { setError("No se pudo marcar el aviso. Comprueba las Rules de Firestore desplegadas."); }
+    catch (reason) { console.warn("No se pudo marcar el aviso como leído.", reason); setError("No pudimos actualizar el aviso. Intenta de nuevo."); }
     finally { setBusyId(""); }
   };
 

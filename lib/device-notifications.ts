@@ -52,13 +52,13 @@ export async function getDeviceNotificationStatus(uid: string): Promise<DeviceNo
 
 async function registerGrantedDevice(uid: string): Promise<DeviceNotificationResult> {
   if (Platform.OS === "web") {
-    return { status: "unsupported", message: "Las notificaciones push requieren la aplicación instalada en Android o iOS." };
+    return { status: "unsupported", message: "Activa los avisos desde la aplicación instalada en tu teléfono." };
   }
   const projectId = getExpoProjectId();
   if (!projectId) {
-    return { status: "needs-project", message: "Falta asociar el ID del proyecto Expo/EAS para registrar notificaciones push." };
+    return { status: "needs-project", message: "Los avisos de este teléfono aún no están listos. Intenta de nuevo más tarde." };
   }
-  if (!db) return { status: "error", message: "Firebase no está configurado para registrar este dispositivo." };
+  if (!db) return { status: "error", message: "No pudimos activar los avisos. Intenta de nuevo." };
 
   try {
     if (Platform.OS === "android") {
@@ -72,7 +72,7 @@ async function registerGrantedDevice(uid: string): Promise<DeviceNotificationRes
     let permissions = await Notifications.getPermissionsAsync();
     if (!permissions.granted) permissions = await Notifications.requestPermissionsAsync();
     if (!permissions.granted) {
-      return { status: "permission-denied", message: "El permiso está desactivado. Puedes cambiarlo en los ajustes del teléfono." };
+      return { status: "permission-denied", message: "Permite los avisos de EUFORIA en los ajustes del teléfono." };
     }
 
     const expoToken = await Notifications.getExpoPushTokenAsync({ projectId });
@@ -89,31 +89,31 @@ async function registerGrantedDevice(uid: string): Promise<DeviceNotificationRes
       updatedAt: serverTimestamp(),
     }, { merge: true });
     await SecureStore.setItemAsync(pushedUidsKey, uid);
-    return { status: "registered", message: "Notificaciones push activadas en este dispositivo." };
+    return { status: "registered", message: "Avisos activados en este teléfono." };
   } catch (error) {
     console.warn("No se pudo registrar el token push de EUFORIA.", (error as { code?: string })?.code);
-    return { status: "error", message: "No se pudo registrar el dispositivo. Verifica el proyecto EAS, las credenciales push y las Rules de Firestore." };
+    return { status: "error", message: "No pudimos activar los avisos. Intenta de nuevo." };
   }
 }
 
 export async function enableDeviceNotifications(uid: string): Promise<DeviceNotificationResult> {
   if (Platform.OS === "web") {
-    return { status: "unsupported", message: "Las notificaciones push requieren la aplicación instalada en Android o iOS." };
+    return { status: "unsupported", message: "Activa los avisos desde la aplicación instalada en tu teléfono." };
   }
   if (!getExpoProjectId()) {
-    return { status: "needs-project", message: "Falta asociar el ID del proyecto Expo/EAS para registrar notificaciones push." };
+    return { status: "needs-project", message: "Los avisos de este teléfono aún no están listos. Intenta de nuevo más tarde." };
   }
   try {
     const permissions = await Notifications.getPermissionsAsync();
     if (!permissions.granted) {
       const requested = await Notifications.requestPermissionsAsync();
       if (!requested.granted) {
-        return { status: "permission-denied", message: "El permiso está desactivado. Actívalo en los ajustes del teléfono y vuelve a intentarlo." };
+        return { status: "permission-denied", message: "Permite los avisos de EUFORIA en los ajustes del teléfono y vuelve a intentarlo." };
       }
     }
     return await registerGrantedDevice(uid);
   } catch {
-    return { status: "error", message: "No se pudo solicitar permiso de notificaciones en este dispositivo." };
+    return { status: "error", message: "No pudimos solicitar permiso para los avisos. Intenta de nuevo." };
   }
 }
 

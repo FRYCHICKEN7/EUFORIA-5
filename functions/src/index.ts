@@ -233,6 +233,35 @@ function publicEmployeeQuery(businessRef: FirebaseFirestore.DocumentReference) {
     .limit(100);
 }
 
+export const prepararNegocioInicial = onCall(async (request) => {
+  const adminUid = request.auth?.uid;
+  if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión para continuar.");
+  const newBusinessRef = db.collection("negocios").doc();
+  const now = Timestamp.now();
+
+  return db.runTransaction(async (transaction) => {
+    const [admin, activeBusinesses] = await Promise.all([
+      loadProfileInTransaction(transaction, adminUid),
+      transaction.get(db.collection("negocios").where("activo", "==", true).limit(1)),
+    ]);
+    if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "No tienes autorización para esta acción.");
+    const activeBusiness = activeBusinesses.docs[0];
+    if (activeBusiness) {
+      const data = activeBusiness.data();
+      return { ok: true as const, created: false, businessId: activeBusiness.id, nombre: String(data.nombre ?? data.nombreNegocio ?? "EUFORIA Beauty Studio") };
+    }
+
+    transaction.create(newBusinessRef, {
+      nombre: "EUFORIA Beauty Studio",
+      activo: true,
+      modoNegocio: "multiEmpleado",
+      createdAt: now,
+      updatedAt: now,
+    });
+    return { ok: true as const, created: true, businessId: newBusinessRef.id, nombre: "EUFORIA Beauty Studio" };
+  });
+});
+
 export const crearPerfilEmpleado = onCall<PromoteEmployeeInput>(async (request) => {
   const adminUid = request.auth?.uid;
   if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión como administrador.");
@@ -290,15 +319,20 @@ export const crearPerfilEmpleado = onCall<PromoteEmployeeInput>(async (request) 
       createdAt: now,
       updatedAt: now,
     };
-    const appProfile = {
-      ...source,
+    const appProfile: DocumentData = {
       id: uid,
       email,
       name,
       displayName: name,
+      profileImage,
+      ...(typeof source.phone === "string" && source.phone ? { phone: source.phone } : {}),
+      ...(Number.isInteger(source.birthdayDay) && Number.isInteger(source.birthdayMonth)
+        ? { birthdayDay: source.birthdayDay, birthdayMonth: source.birthdayMonth }
+        : {}),
       role: "empleado",
       rol: "empleado",
       negocioId,
+      createdAt: source.createdAt ?? now,
       updatedAt: now,
     };
     // Normalize both user collections so the Auth listener and legacy readers agree.

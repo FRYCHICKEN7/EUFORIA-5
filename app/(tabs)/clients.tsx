@@ -8,10 +8,11 @@ import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, loadBusinesses, type BusinessRecord } from "@/lib/appointments";
-import { createEmployeeProfile, subscribeAdminClients, subscribeAdminEmployees, type CustomerProfile, type EmployeeProfile } from "@/lib/profiles";
+import { createEmployeeProfile, createInitialBusiness, subscribeAdminClients, subscribeAdminEmployees, type CustomerProfile, type EmployeeProfile } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
 import { useThemeContext } from "@/lib/theme-provider";
 import { getWhatsAppUrl } from "@/lib/whatsapp";
+import { formatCustomerBirthday } from "@/lib/customer-fields";
 
 function ClientsContent() {
   const { user, profile } = useAuthSession();
@@ -31,6 +32,7 @@ function ClientsContent() {
   const [businessId, setBusinessId] = useState("");
   const [employeeCode, setEmployeeCode] = useState("");
   const [creating, setCreating] = useState(false);
+  const [creatingBusiness, setCreatingBusiness] = useState(false);
 
   useEffect(() => {
     const firstTick = setTimeout(() => setNow(Date.now()), 0);
@@ -52,19 +54,19 @@ function ClientsContent() {
           setLoading(false);
         }, (reason) => {
           if (!active) return;
-          const code = (reason as Error & { code?: string }).code ?? "";
-          setError(code === "permission-denied" ? "El perfil administrador no puede leer users/usuarios. Despliega las reglas compatibles con ambas colecciones." : reason.message);
+          console.warn("No se pudo cargar la lista de clientes.", reason);
+          setError("No pudimos cargar los clientes. Intenta de nuevo.");
           setLoading(false);
         });
         stopEmployees = subscribeAdminEmployees((rows) => { if (active) setEmployees(rows); }, (reason) => {
-          const code = (reason as Error & { code?: string }).code ?? "";
-          if (active) setError(code === "permission-denied" ? "No se pudo leer el directorio empleados; revisa las reglas desplegadas." : reason.message);
+          console.warn("No se pudo cargar la lista del equipo.", reason);
+          if (active) setError("No pudimos cargar el equipo. Intenta de nuevo.");
         });
         void loadBusinesses().then((rows) => {
           if (!active) return;
           setBusinesses(rows);
-          setBusinessId((previous) => previous || rows[0]?.id || "");
-        }).catch((reason) => { if (active) setError(friendlyError(reason)); });
+          setBusinessId((previous) => rows.length === 1 ? rows[0].id : rows.some((business) => business.id === previous) ? previous : "");
+        }).catch((reason) => { console.warn("No se pudo cargar la lista de negocios.", reason); if (active) setError("No pudimos cargar los negocios. Intenta de nuevo."); });
       } catch (reason) {
         if (active) { setError(friendlyError(reason)); setLoading(false); }
       }
@@ -75,7 +77,7 @@ function ClientsContent() {
   const filtered = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return clients;
-    return clients.filter((item) => [item.name, item.displayName, item.nombre, item.email, item.phone, item.telefono, item.identityNumber, item.id]
+    return clients.filter((item) => [item.name, item.displayName, item.nombre, item.email, item.phone, item.telefono]
       .some((value) => String(value ?? "").toLowerCase().includes(term)));
   }, [clients, search]);
   const newClients = clients.filter((item) => {
@@ -84,8 +86,8 @@ function ClientsContent() {
   }).length;
 
   const createEmployee = async () => {
-    if (!selectedClient || !businessId || !employeeCode.trim()) {
-      setNotice("Selecciona el negocio y escribe el código de empleado.");
+    if (!selectedClient || !businessId || !/^[A-Za-z0-9_-]{1,30}$/.test(employeeCode.trim())) {
+      setNotice("Completa el negocio y un código válido para continuar.");
       return;
     }
     setCreating(true);
@@ -96,11 +98,33 @@ function ClientsContent() {
       setSelectedClient(null);
       setEmployeeCode("");
     } catch (reason) {
+      console.warn("No se pudo crear el perfil de empleado.", reason);
       setNotice(employeeError(reason));
     } finally {
       setCreating(false);
     }
   };
+
+  const createBusiness = async () => {
+    if (creatingBusiness) return;
+    setCreatingBusiness(true);
+    setNotice("");
+    try {
+      const result = await createInitialBusiness();
+      const rows = await loadBusinesses();
+      setBusinesses(rows);
+      setBusinessId(result.businessId || (rows.length === 1 ? rows[0].id : ""));
+      setNotice("El negocio EUFORIA Beauty Studio está listo. Ahora puedes continuar.");
+    } catch (reason) {
+      console.warn("No se pudo preparar el negocio inicial.", reason);
+      setNotice("No pudimos preparar el negocio. Intenta de nuevo.");
+    } finally {
+      setCreatingBusiness(false);
+    }
+  };
+
+  const employeeCodeValid = /^[A-Za-z0-9_-]{1,30}$/.test(employeeCode.trim());
+  const canCreateEmployee = Boolean(selectedClient && businessId && employeeCodeValid && !creating);
 
   const openWhatsApp = async (client: CustomerProfile) => {
     const phoneNumber = String(client.phone ?? client.telefono ?? "");
@@ -110,7 +134,7 @@ function ClientsContent() {
       return;
     }
     try { await Linking.openURL(url); }
-    catch { setNotice("No se pudo abrir WhatsApp. Comprueba que esté instalado o intenta desde el navegador."); }
+    catch (reason) { console.warn("No se pudo abrir el chat de WhatsApp.", reason); setNotice("No pudimos abrir WhatsApp. Intenta de nuevo."); }
   };
 
   return (
@@ -118,7 +142,7 @@ function ClientsContent() {
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
-          <View style={styles.titleRow}><View><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>PERFILES FIREBASE REALES</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Clientes y equipo</Text></View></View>
+          <View style={styles.titleRow}><View><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>CLIENTES REGISTRADOS</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Clientes y equipo</Text></View></View>
           <View style={styles.metrics}>
             <Metric label="Clientes" value={loading ? "…" : String(clients.length)} />
             <Metric label="Nuevos · 30 días" value={loading ? "…" : String(newClients)} />
@@ -130,19 +154,19 @@ function ClientsContent() {
           <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Equipo autorizado</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Activa a una persona después de que se registre como cliente.</Text></View>
           {employees.length === 0 ? <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>Aún no hay perfiles de empleado. La cuenta nueva primero debe registrarse como cliente.</Text></View> : employees.map((employee) => <EmployeeCard key={employee.id} item={employee} businessName={businesses.find((business) => business.id === employee.negocioId)?.nombre} />)}
 
-          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Datos de users/{"{uid}"} y usuarios/{"{uid}"}, unidos por el UID de Authentication.</Text></View>
-          <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo, teléfono o UID" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Leyendo perfiles Firebase…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{clients.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{clients.length === 0 ? "Al registrarse, cada persona queda guardada con el UID de Authentication y rol cliente." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onWhatsApp={() => void openWhatsApp(client)} onCreateEmployee={() => { setSelectedClient(client); setEmployeeCode(""); setNotice(""); }} />)}
+          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Perfiles de las personas que usan EUFORIA.</Text></View>
+          <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo o teléfono" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando perfiles…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{clients.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{clients.length === 0 ? "Aquí aparecerán las personas que se registren como clientes." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onWhatsApp={() => void openWhatsApp(client)} onCreateEmployee={() => { setSelectedClient(client); setEmployeeCode(""); setNotice(""); }} />)}
         </ScrollView>
         <Modal visible={Boolean(selectedClient)} transparent animationType="slide" onRequestClose={() => setSelectedClient(null)}>
           <View style={styles.modalShade}><View style={styles.sheet}>
-            <View style={styles.sheetTop}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>PERFIL VINCULADO A AUTH</Text><Text style={styles.sheetTitle}>{selectedClient?.name ?? selectedClient?.displayName ?? selectedClient?.nombre ?? "Cliente"}</Text><Text numberOfLines={1} style={styles.uid}>UID: {selectedClient?.id}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Cerrar" onPress={() => setSelectedClient(null)} style={styles.close}><X size={18} color={BRAND.wine} /></Pressable></View>
+            <View style={styles.sheetTop}><View style={{ flex: 1 }}><Text style={styles.eyebrow}>CREAR PERFIL DE EMPLEADO</Text><Text style={styles.sheetTitle}>{selectedClient?.name ?? selectedClient?.displayName ?? selectedClient?.nombre ?? "Cliente"}</Text></View><Pressable accessibilityRole="button" accessibilityLabel="Cerrar" onPress={() => setSelectedClient(null)} style={styles.close}><X size={18} color={BRAND.wine} /></Pressable></View>
             <Text style={styles.fieldLabel}>Negocio activo</Text>
-            {businesses.length === 0 ? <Text style={styles.inlineEmptyText}>No hay ningún negocio activo en Firebase.</Text> : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((business) => <Pressable key={business.id} onPress={() => setBusinessId(business.id)} style={[styles.businessChip, businessId === business.id && styles.businessChipSelected]}><Text style={[styles.businessText, businessId === business.id && styles.businessTextSelected]}>{business.nombre}</Text></Pressable>)}</ScrollView>}
-            <Text style={styles.fieldLabel}>Código de empleado (campo Empleado)</Text>
-            <TextInput value={employeeCode} onChangeText={setEmployeeCode} placeholder="Ej.: 1" placeholderTextColor={BRAND.muted} autoCapitalize="characters" style={styles.modalInput} />
-            <Text style={styles.modalHint}>Esto cambia el perfil cliente a empleado solo mediante Cloud Function; nunca se eleva desde el formulario público.</Text>
-            <Pressable disabled={creating || !selectedClient || businesses.length === 0} onPress={() => void createEmployee()} style={[styles.primary, (creating || businesses.length === 0) && styles.disabled]}><Text style={styles.primaryText}>{creating ? "Creando perfil…" : "Crear perfil de empleado"}<Text style={{ fontWeight: "900" }}>  ›</Text></Text></Pressable>
+            {businesses.length === 0 ? <View><Text style={styles.inlineEmptyText}>Aún no hay un negocio activo.</Text><Pressable accessibilityRole="button" disabled={creatingBusiness} onPress={() => void createBusiness()} style={[styles.businessCreate, creatingBusiness && styles.disabled]}><Text style={styles.businessCreateText}>{creatingBusiness ? "Preparando…" : "Crear negocio EUFORIA Beauty Studio"}</Text></Pressable></View> : <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((business) => <Pressable key={business.id} onPress={() => setBusinessId(business.id)} style={[styles.businessChip, businessId === business.id && styles.businessChipSelected]}><Text style={[styles.businessText, businessId === business.id && styles.businessTextSelected]}>{business.nombre}</Text></Pressable>)}</ScrollView>}{businesses.length > 1 && !businessId ? <Text style={styles.fieldError}>Selecciona un negocio activo.</Text> : null}
+            <Text style={styles.fieldLabel}>Código de empleado</Text>
+            <TextInput value={employeeCode} onChangeText={setEmployeeCode} placeholder="Ej.: 1" placeholderTextColor={BRAND.muted} autoCapitalize="characters" style={styles.modalInput} />{employeeCode.trim().length === 0 ? <Text style={styles.fieldError}>Ingresa el código del empleado.</Text> : !employeeCodeValid ? <Text style={styles.fieldError}>Usa de 1 a 30 letras, números, guion o guion bajo.</Text> : null}
+            <Text style={styles.modalHint}>El acceso de empleado se activa únicamente desde administración.</Text>
+            <Pressable disabled={!canCreateEmployee || businesses.length === 0} onPress={() => void createEmployee()} style={[styles.primary, (!canCreateEmployee || businesses.length === 0) && styles.disabled]}><Text style={styles.primaryText}>{creating ? "Creando perfil…" : "Crear perfil de empleado"}<Text style={{ fontWeight: "900" }}>  ›</Text></Text></Pressable>
           </View></View>
         </Modal>
       </ScreenContainer>
@@ -165,8 +189,8 @@ function ClientCard({ item, onCreateEmployee, onWhatsApp }: { item: CustomerProf
       <View style={styles.copy}>
         <Text numberOfLines={1} style={styles.name}>{displayName}</Text>
         <Text numberOfLines={1} style={styles.details}>{item.email ?? "Sin correo"}</Text>
-        <Text style={styles.details}>Tel. {item.phone ?? item.telefono ?? "No agregado"}{item.identityNumber ? ` · ID ${item.identityNumber}` : ""}</Text>
-        <Text numberOfLines={1} style={styles.uid}>UID {item.id} · {String(item.role ?? item.rol ?? "cliente")}</Text>
+        <Text style={styles.details}>Tel. {item.phone ?? item.telefono ?? "No agregado"}</Text>
+        {formatCustomerBirthday(item.birthdayDay, item.birthdayMonth) ? <Text style={styles.details}>Cumpleaños: {formatCustomerBirthday(item.birthdayDay, item.birthdayMonth)}</Text> : null}
         <Text style={styles.details}>Registro {dateLabel}</Text>
         <View style={styles.cardActions}>
           <Pressable accessibilityRole="button" onPress={onCreateEmployee} style={styles.promote}><UserPlus size={15} color={BRAND.primaryDark} /><Text style={styles.promoteText}>Crear perfil de empleado</Text></Pressable>
@@ -179,20 +203,19 @@ function ClientCard({ item, onCreateEmployee, onWhatsApp }: { item: CustomerProf
 
 function EmployeeCard({ item, businessName }: { item: EmployeeProfile; businessName?: string }) {
   const name = String(item.name ?? "Empleado EUFORIA");
-  return <View style={styles.employeeCard}><View style={styles.avatarSmall}><Text style={styles.initial}>{name.charAt(0).toUpperCase()}</Text></View><View style={styles.copy}><Text style={styles.name}>{name} · {String(item.Empleado ?? "Sin código")}</Text><Text style={styles.details}>{item.email ?? "Sin correo"}{businessName ? ` · ${businessName}` : ""}</Text><Text style={styles.details}>{item.activo === false ? "Inactivo" : item.disponible ? "Disponible para citas" : "No disponible para citas"}</Text><Text numberOfLines={1} style={styles.uid}>UID {item.id}</Text></View></View>;
+  return <View style={styles.employeeCard}><View style={styles.avatarSmall}><Text style={styles.initial}>{name.charAt(0).toUpperCase()}</Text></View><View style={styles.copy}><Text style={styles.name}>{name} · {String(item.Empleado ?? "Sin código")}</Text><Text style={styles.details}>{item.email ?? "Sin correo"}{businessName ? ` · ${businessName}` : ""}</Text><Text style={styles.details}>{item.activo === false ? "Inactivo" : item.disponible ? "Disponible para citas" : "No disponible para citas"}</Text></View></View>;
 }
 
 function friendlyError(reason: unknown) {
-  const code = (reason as { code?: string })?.code ?? "";
-  if (code.includes("permission-denied")) return "Firebase rechazó la lectura. Despliega las reglas del nuevo esquema users/usuarios/empleados y vuelve a iniciar sesión.";
-  return reason instanceof Error ? reason.message : "No se pudo leer Firebase.";
+  console.warn("No se pudo cargar la información de clientes y equipo.", reason);
+  return "No pudimos cargar la información. Intenta de nuevo.";
 }
 function employeeError(reason: unknown) {
   const code = (reason as { code?: string })?.code ?? "";
-  if (code.includes("permission-denied")) return "Solo una cuenta admin puede crear perfiles. Revisa el UID/rol admin y las Functions desplegadas.";
-  if (code.includes("failed-precondition")) return reason instanceof Error ? reason.message : "La persona debe tener perfil cliente completo y el negocio debe estar activo.";
-  if (code.includes("already-exists")) return reason instanceof Error ? reason.message : "La cuenta o código ya está asignado.";
-  return "No se pudo crear el perfil. Comprueba que las Cloud Functions estén desplegadas y revisa el código/cuenta.";
+  if (code.includes("permission-denied")) return "No tienes autorización para crear perfiles de empleado.";
+  if (code.includes("failed-precondition")) return "Confirma que la persona y el negocio estén activos.";
+  if (code.includes("already-exists")) return "Esa cuenta o ese código ya están asignados.";
+  return "No pudimos crear el perfil. Revisa los datos e intenta de nuevo.";
 }
 
 const styles = StyleSheet.create({
@@ -210,8 +233,8 @@ const styles = StyleSheet.create({
   search: { flexDirection: "row", alignItems: "center", gap: 9, height: 48, backgroundColor: BRAND.surface, borderRadius: 17, marginHorizontal: 20, marginBottom: 12, paddingHorizontal: 14, borderWidth: 1, borderColor: BRAND.border }, input: { flex: 1, color: BRAND.wine, fontSize: 13 },
   state: { alignItems: "center", gap: 9, padding: 28 }, hint: { color: BRAND.muted, fontSize: 12, lineHeight: 18, textAlign: "center" },
   empty: { alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 24, padding: 26, marginHorizontal: 20, borderWidth: 1, borderColor: BRAND.border }, emptyTitle: { color: BRAND.wine, fontSize: 15, fontWeight: "800", marginTop: 9, textAlign: "center" },
-  card: { flexDirection: "row", alignItems: "flex-start", gap: 11, backgroundColor: BRAND.surface, borderRadius: 18, padding: 13, marginHorizontal: 20, marginBottom: 8, borderWidth: 1, borderColor: BRAND.border }, photo: { width: 46, height: 46, borderRadius: 23, backgroundColor: BRAND.softPink }, avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, avatarSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, initial: { color: BRAND.primaryDark, fontSize: 15, fontWeight: "800" }, copy: { flex: 1 }, name: { color: BRAND.wine, fontSize: 13, fontWeight: "800" }, details: { color: BRAND.muted, fontSize: 10, lineHeight: 15, marginTop: 2 }, uid: { color: BRAND.muted, fontSize: 9, marginTop: 3 }, cardActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 7 }, promote: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: BRAND.softPink }, promoteText: { color: BRAND.primaryDark, fontSize: 10, fontWeight: "800" }, whatsappButton: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "#EAF6EF" }, whatsappText: { color: "#187A4E", fontSize: 10, fontWeight: "800" },
+  card: { flexDirection: "row", alignItems: "flex-start", gap: 11, backgroundColor: BRAND.surface, borderRadius: 18, padding: 13, marginHorizontal: 20, marginBottom: 8, borderWidth: 1, borderColor: BRAND.border }, photo: { width: 46, height: 46, borderRadius: 23, backgroundColor: BRAND.softPink }, avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, avatarSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, initial: { color: BRAND.primaryDark, fontSize: 15, fontWeight: "800" }, copy: { flex: 1 }, name: { color: BRAND.wine, fontSize: 13, fontWeight: "800" }, details: { color: BRAND.muted, fontSize: 10, lineHeight: 15, marginTop: 2 }, cardActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 7 }, promote: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: BRAND.softPink }, promoteText: { color: BRAND.primaryDark, fontSize: 10, fontWeight: "800" }, whatsappButton: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "#EAF6EF" }, whatsappText: { color: "#187A4E", fontSize: 10, fontWeight: "800" },
   employeeCard: { flexDirection: "row", gap: 9, alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 17, padding: 11, marginHorizontal: 20, marginBottom: 7, borderWidth: 1, borderColor: BRAND.border },
   modalShade: { flex: 1, backgroundColor: "rgba(40, 15, 26, .4)", justifyContent: "flex-end" }, sheet: { padding: 21, paddingBottom: 30, backgroundColor: BRAND.background, borderTopLeftRadius: 27, borderTopRightRadius: 27 }, sheetTop: { flexDirection: "row", alignItems: "flex-start", gap: 10 }, sheetTitle: { color: BRAND.wine, fontSize: 20, fontWeight: "800", marginTop: 4 }, close: { width: 36, height: 36, borderRadius: 18, alignItems: "center", justifyContent: "center", backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border },
-  fieldLabel: { color: BRAND.wine, fontSize: 12, fontWeight: "800", marginTop: 17, marginBottom: 7 }, businessList: { gap: 8 }, businessChip: { backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999 }, businessChipSelected: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, businessText: { color: BRAND.wine, fontSize: 11, fontWeight: "700" }, businessTextSelected: { color: "#FFFFFF" }, modalInput: { height: 49, borderWidth: 1, borderColor: BRAND.border, borderRadius: 15, backgroundColor: BRAND.surface, paddingHorizontal: 13, color: BRAND.wine, fontSize: 15 }, modalHint: { color: BRAND.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, primary: { minHeight: 49, borderRadius: 999, backgroundColor: BRAND.primary, alignItems: "center", justifyContent: "center", marginTop: 17 }, primaryText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" }, disabled: { opacity: .55 },
+  fieldLabel: { color: BRAND.wine, fontSize: 12, fontWeight: "800", marginTop: 17, marginBottom: 7 }, fieldError: { color: BRAND.error, fontSize: 11, lineHeight: 16, marginTop: 5 }, businessCreate: { alignSelf: "flex-start", marginTop: 9, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 999, backgroundColor: BRAND.primary }, businessCreateText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" }, businessList: { gap: 8 }, businessChip: { backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border, paddingHorizontal: 13, paddingVertical: 9, borderRadius: 999 }, businessChipSelected: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, businessText: { color: BRAND.wine, fontSize: 11, fontWeight: "700" }, businessTextSelected: { color: "#FFFFFF" }, modalInput: { height: 49, borderWidth: 1, borderColor: BRAND.border, borderRadius: 15, backgroundColor: BRAND.surface, paddingHorizontal: 13, color: BRAND.wine, fontSize: 15 }, modalHint: { color: BRAND.muted, fontSize: 11, lineHeight: 16, marginTop: 8 }, primary: { minHeight: 49, borderRadius: 999, backgroundColor: BRAND.primary, alignItems: "center", justifyContent: "center", marginTop: 17 }, primaryText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" }, disabled: { opacity: .55 },
 });

@@ -23,7 +23,7 @@ function sourceRecord(name: string, uid: string, data: DocumentData): ProfileRec
 }
 
 export async function loadUserProfile(uid: string): Promise<ProfileRecord | null> {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const results = await Promise.all(PROFILE_COLLECTIONS.map((name) => getDoc(doc(db!, name, uid))));
   const records = results.flatMap((snapshot, index) => snapshot.exists()
     ? [sourceRecord(PROFILE_COLLECTIONS[index], uid, snapshot.data())]
@@ -37,7 +37,7 @@ export function subscribeUserProfile(
   next: (profile: ProfileRecord | null) => void,
   error: (reason: Error) => void,
 ): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const sources = new Map<string, ProfileRecord | null>();
   const initial = new Set<string>();
   let failed = false;
@@ -71,7 +71,8 @@ export type CustomerProfile = ProfileRecord & {
   nombre?: string;
   phone?: string;
   telefono?: string;
-  identityNumber?: string;
+  birthdayDay?: number;
+  birthdayMonth?: number;
   profileImage?: string;
   createdAt?: unknown;
   _profileSource?: string;
@@ -83,7 +84,7 @@ export function subscribeAdminClients(
   next: (clients: CustomerProfile[]) => void,
   error: (reason: Error) => void,
 ): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const snapshotsByQuery = new Map<number, Map<string, CustomerProfile>>();
   let failed = false;
   const queries = [
@@ -143,7 +144,7 @@ export function subscribeAdminEmployees(
   next: (employees: EmployeeProfile[]) => void,
   error: (reason: Error) => void,
 ): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   return onSnapshot(query(collection(db, "empleados")), (snapshot) => {
     const employees = snapshot.docs.flatMap((item) => {
       const profile = { ...item.data(), id: item.id } as EmployeeProfile;
@@ -156,7 +157,7 @@ export function subscribeAdminEmployees(
 export type AppNotification = DocumentData & { id: string; titulo?: string; cuerpo?: string; tipo?: string; citaId?: string; leida?: boolean; createdAt?: unknown };
 
 export function subscribeNotifications(uid: string, next: (items: AppNotification[]) => void, error: (reason: Error) => void): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const notificationsQuery = query(collection(db, "notificaciones"), where("destinatarioId", "==", uid), orderBy("createdAt", "desc"), limit(50));
   return onSnapshot(notificationsQuery, (snapshot) => {
     next(snapshot.docs.map((item) => ({ id: item.id, ...item.data() })) as AppNotification[]);
@@ -164,33 +165,40 @@ export function subscribeNotifications(uid: string, next: (items: AppNotificatio
 }
 
 export async function markNotificationRead(id: string) {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   await updateDoc(doc(db, "notificaciones", id), { leida: true });
 }
 
 export async function createEmployeeProfile(input: { uid: string; negocioId: string; Empleado: string }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<typeof input, { ok: true; empleadoId: string; codigo: string }>(functions, "crearPerfilEmpleado");
   const result = await callable(input);
+  return result.data;
+}
+
+export async function createInitialBusiness() {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<Record<string, never>, { ok: true; created: boolean; businessId: string; nombre: string }>(functions, "prepararNegocioInicial");
+  const result = await callable({});
   return result.data;
 }
 
 export type WeeklyAvailabilityDay = { dia: number; activo: boolean; inicio: string; fin: string };
 
 export async function saveEmployeeAvailability(input: { disponible: boolean; dias: WeeklyAvailabilityDay[] }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<typeof input, { ok: true; disponible: boolean }>(functions, "guardarDisponibilidadEmpleado");
   const result = await callable(input);
   return result.data;
 }
 
 export async function loadEmployeeAvailability(uid: string): Promise<{ negocioId: string; disponible: boolean; dias: WeeklyAvailabilityDay[] }> {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const employeeSnapshot = await getDoc(doc(db, "empleados", uid));
-  if (!employeeSnapshot.exists()) throw new Error("No existe empleados/{uid} para esta cuenta.");
+  if (!employeeSnapshot.exists()) throw new Error("No encontramos tu perfil de empleado.");
   const employee = employeeSnapshot.data();
   const negocioId = String(employee.negocioId ?? "");
-  if (!negocioId) throw new Error("El perfil de empleado no está vinculado a un negocio.");
+  if (!negocioId) throw new Error("Tu perfil de empleado no está vinculado a un negocio.");
   const scheduleSnapshot = await getDocs(collection(db, "negocios", negocioId, "empleados", uid, "disponibilidad"));
   const saved = new Map(scheduleSnapshot.docs.map((item) => [item.id, item.data()]));
   const dias = Array.from({ length: 7 }, (_, dia) => {

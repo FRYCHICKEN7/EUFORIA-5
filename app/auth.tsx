@@ -4,7 +4,7 @@ import { Image } from "expo-image";
 import { router } from "expo-router";
 import { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from "firebase/auth";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
-import { ArrowLeft, ArrowRight, CreditCard, Eye, EyeOff, Fingerprint, LockKeyhole, Mail, Phone, Settings, UserRound } from "lucide-react-native";
+import { ArrowLeft, ArrowRight, Eye, EyeOff, Fingerprint, LockKeyhole, Mail, Phone, Settings, UserRound } from "lucide-react-native";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
 import { enrollBiometricFor, isBiometricEnrolledFor, isBiometricLoginAvailable } from "@/lib/biometrics";
@@ -12,6 +12,8 @@ import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
 import { loadUserProfile } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
 import { unregisterDeviceNotifications } from "@/lib/device-notifications";
+import { BirthdayPicker } from "@/components/birthday-picker";
+import { normalizeCustomerPhone } from "@/lib/customer-fields";
 
 type AuthMode = "login" | "register" | "recovery";
 type AuthRole = "administrador" | "empleado" | "cliente";
@@ -22,9 +24,9 @@ function getAuthErrorMessage(error: unknown) {
   if (code.includes("invalid-credential") || code.includes("wrong-password") || code.includes("user-not-found")) return "Correo o contraseña incorrectos.";
   if (code.includes("email-already-in-use")) return "Este correo ya está registrado. Inicia sesión o recupera el acceso.";
   if (code.includes("weak-password")) return "La contraseña debe tener al menos 6 caracteres.";
-  if (code.includes("permission-denied")) return "Firebase rechazó la lectura o escritura del perfil. Despliega las Rules compatibles con users y usuarios.";
+  if (code.includes("permission-denied")) return "No pudimos guardar tus datos. Intenta de nuevo.";
   if (code.includes("network-request-failed")) return "No hay conexión. Comprueba tu internet e inténtalo de nuevo.";
-  return "No se pudo completar la operación. Revisa Firebase e inténtalo de nuevo.";
+  return "No se pudo completar la operación. Intenta de nuevo.";
 }
 
 export default function AuthScreen() {
@@ -35,7 +37,8 @@ export default function AuthScreen() {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
-  const [identityNumber, setIdentityNumber] = useState("");
+  const [birthdayDay, setBirthdayDay] = useState<number | null>(null);
+  const [birthdayMonth, setBirthdayMonth] = useState<number | null>(null);
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
@@ -66,19 +69,16 @@ export default function AuthScreen() {
       setMessage("Escribe un nombre completo de 2 a 100 caracteres.");
       return;
     }
-    if (mode === "register" && phone.trim().length > 20) {
-      setMessage("El teléfono no puede tener más de 20 caracteres.");
-      return;
-    }
-    if (mode === "register" && identityNumber.trim().length > 40) {
-      setMessage("El número de identidad no puede tener más de 40 caracteres.");
+    const normalizedPhone = mode === "register" ? normalizeCustomerPhone(phone) : null;
+    if (mode === "register" && !normalizedPhone) {
+      setMessage("Escribe un teléfono de ocho dígitos o un número internacional que comience con +.");
       return;
     }
     const configured = await ensureFirebaseConfigured();
     const auth = firebaseAuth;
     const store = db;
     if (!configured || !auth || !store) {
-      setMessage("Firebase no está configurado en este entorno.");
+      setMessage("El servicio no está disponible ahora. Intenta de nuevo.");
       return;
     }
 
@@ -86,7 +86,7 @@ export default function AuthScreen() {
     try {
       if (mode === "recovery") {
         await sendPasswordResetEmail(auth, normalizedEmail);
-        setMessage("Si existe una cuenta para ese correo, Firebase enviará instrucciones de recuperación. Revisa también Spam.");
+        setMessage("Si existe una cuenta para ese correo, enviaremos las instrucciones de recuperación. Revisa también Spam.");
         return;
       }
       if (password.length < 6) {
@@ -113,8 +113,8 @@ export default function AuthScreen() {
           role: "cliente",
           rol: "cliente",
           createdAt: serverTimestamp(),
-          ...(phone.trim() ? { phone: phone.trim() } : {}),
-          ...(identityNumber.trim() ? { identityNumber: identityNumber.trim() } : {}),
+          phone: normalizedPhone!,
+          ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
         };
         const batch = writeBatch(store);
         batch.set(doc(store, "users", credential.user.uid), profileData);
@@ -123,24 +123,9 @@ export default function AuthScreen() {
         profile = await loadUserProfile(credential.user.uid);
       }
 
-      // Solo repara cuentas cliente sin perfil; nunca crea ni eleva cuentas privilegiadas.
-      if (mode === "login" && role === "cliente" && !profile) {
-        const profileData = {
-          id: credential.user.uid,
-          email: credential.user.email ?? normalizedEmail,
-          role: "cliente",
-          rol: "cliente",
-          createdAt: serverTimestamp(),
-        };
-        const batch = writeBatch(store);
-        batch.set(doc(store, "users", credential.user.uid), profileData);
-        batch.set(doc(store, "usuarios", credential.user.uid), profileData);
-        await batch.commit();
-        profile = await loadUserProfile(credential.user.uid);
-      }
       if (!profile) {
         await signOut(auth);
-        setMessage(`No existe un perfil vinculado al UID ${credential.user.uid}. Comprueba users, usuarios o empleados en Firestore.`);
+        setMessage("No encontramos los datos de esta cuenta. Regístrate con tu teléfono o consulta con administración.");
         return;
       }
 
@@ -154,11 +139,11 @@ export default function AuthScreen() {
       if (!roleMatches) {
         await signOut(auth);
         setMessage(storedRole === null
-          ? "Los perfiles encontrados tienen un rol inválido o contradictorio. Pide a administración que los reconcilie."
+          ? "No pudimos validar el tipo de cuenta. Contacta con administración."
           : selectedRoleForLogin === "administrador"
-            ? "Esta cuenta no tiene rol de administrador en su perfil vinculado al UID de Authentication."
+            ? "Esta cuenta no tiene acceso de administración."
             : selectedRoleForLogin === "empleado"
-              ? "Esta cuenta no tiene perfil aprobado de empleado. Regístrate como cliente y solicita la activación al administrador."
+              ? "Esta cuenta aún no tiene acceso de empleado. Solicita la activación a administración."
               : "Esta cuenta tiene un rol distinto. Selecciona el tipo de acceso correspondiente.");
         return;
       }
@@ -171,7 +156,7 @@ export default function AuthScreen() {
       }
       router.replace(destination);
     } catch (error) {
-      console.warn("Authentication/Firestore rechazó la operación.", (error as { code?: string })?.code);
+      console.warn("No se pudo completar el inicio de sesión.", (error as { code?: string })?.code);
       setMessage(getAuthErrorMessage(error));
       if (firebaseAuth?.currentUser) {
         try { await signOut(firebaseAuth); } catch { /* conserva el error original */ }
@@ -223,8 +208,9 @@ export default function AuthScreen() {
         <View style={styles.form}>
           {mode === "register" && <Input icon={<UserRound size={18} color={BRAND.muted} />} value={name} onChangeText={setName} placeholder="Nombre completo" accessibilityLabel="Nombre completo" autoCapitalize="words" textContentType="name" />}
           <Input icon={<Mail size={18} color={BRAND.muted} />} value={isBiometricLocked && !email ? activeUser?.email ?? "" : email} onChangeText={setEmail} placeholder="Correo electrónico" accessibilityLabel="Correo electrónico" keyboardType="email-address" autoCapitalize="none" textContentType="emailAddress" />
-          {mode === "register" && <Input icon={<Phone size={18} color={BRAND.muted} />} value={phone} onChangeText={setPhone} placeholder="Teléfono (opcional)" accessibilityLabel="Teléfono opcional" keyboardType="phone-pad" textContentType="telephoneNumber" />}
-          {mode === "register" && <Input icon={<CreditCard size={18} color={BRAND.muted} />} value={identityNumber} onChangeText={setIdentityNumber} placeholder="Identidad (opcional)" accessibilityLabel="Número de identidad opcional" autoCapitalize="characters" />}
+          {mode === "register" && <Input icon={<Phone size={18} color={BRAND.muted} />} value={phone} onChangeText={setPhone} placeholder="Teléfono (obligatorio)" accessibilityLabel="Teléfono obligatorio" keyboardType="phone-pad" textContentType="telephoneNumber" />}
+          {mode === "register" && <Text style={styles.fieldHint}>Ocho dígitos hondureños o número internacional con +.</Text>}
+          {mode === "register" && <BirthdayPicker day={birthdayDay} month={birthdayMonth} onChange={(day, month) => { setBirthdayDay(day); setBirthdayMonth(month); }} />}
           {mode !== "recovery" && (
             <View style={styles.inputWrap}>
               <LockKeyhole size={18} color={BRAND.muted} />
@@ -247,7 +233,7 @@ export default function AuthScreen() {
             <Text style={styles.switchText}>{mode === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}<Text style={styles.switchAccent}>{mode === "login" ? "Regístrate" : "Inicia sesión"}</Text></Text>
           </Pressable>
         )}
-        <Text style={styles.security}>{mode === "register" ? "El registro crea un perfil cliente. Administración aprueba el acceso de empleado." : "Tus datos se validan con Firebase Authentication."}</Text>
+        <Text style={styles.security}>{mode === "register" ? "El registro crea una cuenta de cliente. Administración aprueba el acceso del equipo." : "Inicia sesión con tu correo y contraseña."}</Text>
       </View>
       <Modal visible={Boolean(pendingBiometric)} transparent animationType="fade" onRequestClose={() => { const destination = pendingBiometric?.destination; setPendingBiometric(null); if (destination) router.replace(destination as never); }}>
         <View style={styles.modalShade}><View style={styles.modalCard}>
@@ -303,6 +289,7 @@ const styles = StyleSheet.create({
   form: { width: "100%", gap: 10, marginTop: 15 },
   inputWrap: { minHeight: 54, borderWidth: 1, borderColor: BRAND.border, backgroundColor: BRAND.surface, borderRadius: 18, paddingHorizontal: 15, flexDirection: "row", alignItems: "center", gap: 9 },
   input: { flex: 1, color: BRAND.wine, fontSize: 16 },
+  fieldHint: { color: BRAND.muted, fontSize: 11, lineHeight: 16, marginTop: -5, paddingHorizontal: 6 },
   biometricCard: { width: "100%", alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 20, padding: 15, marginTop: 15, borderWidth: 1, borderColor: BRAND.border },
   fingerprintIcon: { width: 47, height: 47, borderRadius: 16, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" },
   biometricTitle: { color: BRAND.wine, fontSize: 15, fontWeight: "800", marginTop: 9, textAlign: "center" },

@@ -57,12 +57,12 @@ export function NotificationSetupCard({ uid }: { uid: string }) {
 
 function messageFor(status: DeviceNotificationStatus) {
   switch (status) {
-    case "unsupported": return "Las alertas push requieren usar la app instalada en Android o iOS.";
-    case "needs-project": return "Pendiente: asociar el proyecto Expo/EAS y sus credenciales nativas de notificaciones.";
-    case "permission-denied": return "El permiso del sistema está desactivado para EUFORIA.";
+    case "unsupported": return "Activa los avisos desde un teléfono compatible.";
+    case "needs-project": return "Los avisos de este teléfono aún no están listos. Intenta de nuevo más tarde.";
+    case "permission-denied": return "Permite los avisos para EUFORIA en los ajustes del teléfono.";
     case "permission-ready": return "Permite avisos para recibir solicitudes, confirmaciones y actualizaciones de tus citas.";
-    case "registered": return "Este dispositivo quedó registrado para recibir avisos de tu cuenta.";
-    case "error": return "No se pudo comprobar o registrar el permiso de este dispositivo.";
+    case "registered": return "Este teléfono recibirá avisos de tu cuenta.";
+    case "error": return "No pudimos activar los avisos. Intenta de nuevo.";
   }
 }
 

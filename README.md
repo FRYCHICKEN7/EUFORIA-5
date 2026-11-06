@@ -8,15 +8,17 @@ El código implementa login y registro de clientes, perfiles Firebase compatible
 
 En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino usan texto blanco; las tarjetas claras conservan su tipografía oscura. Las instrucciones de Firebase de esta guía son manuales: esta entrega no ejecuta despliegues.
 
-**No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales/variables Firebase se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
+**No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
 Los avisos de citas/servicios se guardan en Firestore para cliente, empleado y administración y el código incluye registro de Expo Push y envío desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar Rules/Functions manualmente; no se simuló una entrega.
 
 ## Roles y perfiles
 
-Authentication Email/Password debe estar habilitado. Al registrarse, cada persona —incluido quien posteriormente será empleado— se crea primero como cliente. La app guarda el UID de Authentication como ID del documento y el campo `id`, correo, nombre, teléfono e identidad opcionales, `profileImage` vacío si no hay foto, `role: "cliente"`, `rol: "cliente"` y fecha del servidor. El registro público nunca asigna el rol `empleado` o `admin`.
+Authentication Email/Password debe estar habilitado. Al registrarse, cada persona —incluido quien posteriormente será empleado— se crea primero como cliente. La app guarda el UID de Authentication como ID del documento y el campo `id`, correo, nombre, teléfono obligatorio (ocho dígitos hondureños o formato internacional con `+`), cumpleaños opcional como `birthdayDay` y `birthdayMonth`, `profileImage` vacío si no hay foto, `role: "cliente"`, `rol: "cliente"` y fecha del servidor. No solicita ni guarda número de identidad. El registro público nunca asigna el rol `empleado` o `admin`.
 
-Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles antiguos con `role: "customer"` o `role: "client"` se interpretan como cliente; `role`/`rol` deben coincidir si ambos aparecen. Cuando existen fuentes con roles contradictorios, el acceso se deniega hasta reconciliarlas. El panel **Clientes** une por UID los perfiles reales `users/{uid}` y `usuarios/{uid}`, muestra `email`, `id`, `identityNumber`, `name`, `phone`, `profileImage`, rol y fecha cuando existen, y no inventa valores.
+Los perfiles históricos podrían conservar un valor guardado antes de retirar el dato de identidad; el código ya no lo solicita ni lo presenta y las reglas rechazan que se vuelva a agregar al editar el perfil. No se borraron datos reales; una limpieza retroactiva requiere respaldo y migración manual.
+
+Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles antiguos con `role: "customer"` o `role: "client"` se interpretan como cliente; `role`/`rol` deben coincidir si ambos aparecen. Cuando existen fuentes con roles contradictorios, el acceso se deniega hasta reconciliarlas. El panel **Clientes** une los perfiles `users/{uid}` y `usuarios/{uid}` por su ID interno, muestra correo, nombre, teléfono y cumpleaños cuando existen, y mantiene ocultos los identificadores técnicos. No muestra el campo de identidad.
 
 ### Preparar una cuenta administradora
 
@@ -54,7 +56,7 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 ### Alta segura de empleado
 
 1. La persona se registra desde **Regístrate** usando su correo y contraseña; su rol inicial queda como cliente.
-2. Administración abre **Clientes y equipo**, verifica que es la cuenta correcta y selecciona un negocio activo y un código único para el campo `Empleado`.
+2. Administración abre **Clientes y equipo**, verifica que es la cuenta correcta, elige un negocio activo y escribe un código válido. Si todavía no existe un negocio activo, puede crearlo desde esa misma pantalla como **EUFORIA Beauty Studio**; si hay uno solo, se elige automáticamente.
 3. **Crear perfil de empleado** invoca la Cloud Function `crearPerfilEmpleado`. La Function vuelve a comprobar el rol admin, verifica que el UID exista y tenga correo habilitado en Firebase Authentication, comprueba el perfil cliente y el negocio, y luego sincroniza `users/{uid}` y `usuarios/{uid}` con el rol empleado.
 4. La Function crea `empleados/{uid}` y `negocios/{negocioId}/empleados/{uid}` con `Empleado`, `email`, `id` igual al UID, `name`, `profileImage`, `role/rol: "empleado"`, `activo: true`, `publica: true` y `disponible: false`. No se agrega una cuenta Auth inventada ni se guarda una contraseña desde administración.
 5. El empleado entra por la opción **Empleado**, abre **Mi agenda → Editar mi disponibilidad semanal**, habilita cada día, guarda inicio/fin y marca **Disponible para citas**. Los valores iniciales 08:00–17:00 son solo una sugerencia del formulario y no se escriben hasta guardar.
@@ -108,22 +110,30 @@ El catálogo se mantiene desde **Resumen → Servicios y tiempos estimados**. Ej
 3. Una nueva solicitud queda como `hold` temporal por 30 minutos y genera un aviso Firestore `nueva_solicitud_cita`. El empleado asignado la recibe en la agenda en vivo y puede confirmar o rechazar. Al confirmar, el estado pasa a `confirmada` y el cliente ve la cita en su propio listener en vivo. `expirarHolds` retira reservas temporales vencidas cada cinco minutos.
 4. El empleado asignado pulsa **Inicio de servicio**: Functions registra `startedAt` con la hora del servidor y cambia a `en_curso`. Al pulsar **Servicio finalizado**, registra `completedAt`, cambia a `completada` y calcula `duracionRealMin`. El panel administrativo muestra promedio real y cantidad de trabajos completados por empleado/servicio.
 
-La escritura directa de citas, promociones de rol, disponibilidad y transiciones sensibles está bloqueada en Rules; se hace por Cloud Functions autorizadas. Las consultas de agenda respetan propietario/empleado/admin. `firestore.indexes.json` incluye citas por empleado/cliente y el listener de notificaciones.
+La escritura directa de citas, promociones de rol, disponibilidad y transiciones sensibles está bloqueada por las reglas; se hace mediante funciones autorizadas. Las consultas de agenda respetan cliente/empleado/administración. `firestore.indexes.json` incluye el índice de cliente e inicio, agendas por profesional y el listener de avisos.
 
 ## Desplegar Firebase manualmente
 
-No se ejecutó el despliegue. Después de revisar las reglas, el modelo de datos y el proyecto Firebase objetivo `euforia-e76a6`, una persona autorizada puede ejecutar desde la raíz del repo:
+No se ejecutó ningún despliegue. Después de revisar Rules, índices y Functions, una persona autorizada puede ejecutar desde la raíz del repositorio. El ID de proyecto incluido en cada comando evita depender de un alias local:
 
 ```bash
+# 1. Construir las funciones localmente antes de subirlas
 cd functions
-pnpm install
+pnpm install --frozen-lockfile
 pnpm run build
 cd ..
-firebase deploy --only firestore:rules,firestore:indexes --project euforia-e76a6
-firebase deploy --only functions --project euforia-e76a6
+
+# 2. Publicar las reglas de seguridad
+firebase deploy --project euforia-e76a6 --only firestore:rules
+
+# 3. Publicar los índices compuestos, incluido citas (clienteId ASC, inicio ASC)
+firebase deploy --project euforia-e76a6 --only firestore:indexes
+
+# 4. Publicar todas las funciones, incluida prepararNegocioInicial
+firebase deploy --project euforia-e76a6 --only functions
 ```
 
-Estos comandos modifican servicios reales. La tarea no los ejecutó. La Function programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar un service-account JSON en la app.
+Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.
 
 ## Desarrollo y verificaciones
 
@@ -140,7 +150,7 @@ pnpm install
 pnpm run build
 ```
 
-Las verificaciones locales de esta actualización: TypeScript y lint sin errores, 39 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló y Expo exportó bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni verifican notificaciones/biometría en un dispositivo. Las Rules nuevas iniciaron en Firestore Emulator con el proyecto `demo-euforia` (sin conexión a Firebase real). Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
+Las verificaciones locales de esta actualización: TypeScript y lint sin errores, 43 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni verifican notificaciones/biometría en un dispositivo. Las Rules nuevas iniciaron en Firestore Emulator con el proyecto `demo-euforia` (sin conexión a Firebase real). Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
 
 ## Pendientes fuera de esta fase
 

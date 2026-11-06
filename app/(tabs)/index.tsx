@@ -7,7 +7,7 @@ import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
-import { appointmentMillis, subscribeAdminAppointments, type AppointmentRecord } from "@/lib/appointments";
+import { appointmentMillis, appointmentStatusLabel, subscribeAdminAppointments, type AppointmentRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { hasProfileRole } from "@/lib/roles";
 import { useThemeContext } from "@/lib/theme-provider";
@@ -41,11 +41,13 @@ function SummaryContent() {
           setAppointments(items); setError(""); setLoading(false);
         }, (reason) => {
           if (!active) return;
-          setError(reason.message); setLoading(false);
+          console.warn("No se pudo cargar el resumen de citas.", reason);
+          setError("No pudimos cargar las citas. Intenta de nuevo."); setLoading(false);
         });
       } catch (reason) {
         if (!active) return;
-        setError(reason instanceof Error ? reason.message : "No se pudo abrir la agenda.");
+        console.warn("No se pudo abrir el resumen de citas.", reason);
+        setError("No pudimos cargar las citas. Intenta de nuevo.");
         setLoading(false);
       }
     }, 0);
@@ -87,7 +89,7 @@ function SummaryContent() {
             <Metric icon={<CalendarDays size={19} color={BRAND.wine} />} label="Registros" value={String(appointments.length)} detail="Últimos 30 días" />
           </View>
           <View style={styles.sectionRow}><Text style={[styles.sectionTitle, isDark && styles.onDarkText]}>Próximas citas</Text><Pressable onPress={() => router.push("/employee/schedule")}><Text style={[styles.link, isDark && styles.onDarkText]}>Ver agenda</Text></Pressable></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Actualizando en tiempo real…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && styles.onDarkErrorText]}>No se pudo leer la agenda: {error}</Text><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Comprueba reglas e índices de Firestore.</Text></View> : upcoming.length === 0 ? <Empty icon={<Clock3 size={23} color={BRAND.primary} />} title="No hay citas próximas" text="Las solicitudes reales aparecerán aquí cuando un cliente reserve." /> : upcoming.slice(0, 5).map((item) => <AppointmentTile key={item.id} item={item} />)}
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Actualizando en tiempo real…</Text></View> : error ? <View style={styles.state}><Text style={[styles.errorText, isDark && styles.onDarkErrorText]}>{error}</Text><Text style={[styles.stateText, isDark && styles.onDarkMutedText]}>Intenta de nuevo en unos momentos.</Text></View> : upcoming.length === 0 ? <Empty icon={<Clock3 size={23} color={BRAND.primary} />} title="No hay citas próximas" text="Las solicitudes reales aparecerán aquí cuando un cliente reserve." /> : upcoming.slice(0, 5).map((item) => <AppointmentTile key={item.id} item={item} />)}
           <Pressable accessibilityRole="button" onPress={() => router.push("../admin/services")} style={styles.serviceManager}><View style={styles.serviceIcon}><Scissors size={19} color={BRAND.primaryDark} /></View><View style={{ flex: 1 }}><Text style={styles.serviceManagerTitle}>Servicios y tiempos estimados</Text><Text style={styles.serviceManagerHint}>Configura precio y duración para calcular la disponibilidad</Text></View><Text style={styles.managerLink}>Abrir</Text></Pressable>
           <View style={styles.sectionRow}><Text style={[styles.sectionTitle, isDark && styles.onDarkText]}>Rendimiento del equipo</Text><Text style={[styles.period, isDark && styles.onDarkMutedText]}>Citas completadas · 30 días</Text></View>
           {performance.length === 0 ? <Empty icon={<TrendingUp size={22} color={BRAND.primary} />} title="Aún no hay tiempos reales" text="Cuando un empleado inicie y finalice un servicio, aquí verás los minutos reales por empleado y tipo de trabajo." /> : performance.map((item) => <View key={`${item.employee}:${item.service}`} style={styles.performanceCard}><View style={{ flex: 1 }}><Text numberOfLines={1} style={styles.performanceName}>{item.employee}</Text><Text numberOfLines={1} style={styles.performanceService}>{item.service}</Text></View><View style={styles.performanceNumbers}><Text style={styles.performanceAverage}>{formatMinutes(item.actualTotal / item.count)}</Text><Text style={styles.performanceDetail}>promedio real · {item.count} trabajo{item.count === 1 ? "" : "s"}</Text>{item.estimated > 0 ? <Text style={styles.performanceDetail}>Estimado: {formatMinutes(item.estimated)}</Text> : null}</View></View>)}
@@ -106,7 +108,7 @@ function AppointmentTile({ item }: { item: AppointmentRecord }) {
   const date = appointmentMillis(item.inicio);
   const when = date ? new Date(date).toLocaleString("es-HN", { timeZone: "America/Tegucigalpa", weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "Fecha por confirmar";
   const client = String(item.clienteNombre || item.clienteEmail || "Cliente");
-  return <View style={styles.appointment}><View style={styles.appointmentTop}><Text numberOfLines={1} style={styles.client}>{client}</Text><Text style={styles.status}>{item.estado.replaceAll("_", " ")}</Text></View><Text style={styles.service}>{String(item.servicioNombre ?? "Servicio")}{item.empleadoNombre ? ` · ${String(item.empleadoNombre)}` : ""}</Text><Text style={styles.date}>{when}</Text></View>;
+  return <View style={styles.appointment}><View style={styles.appointmentTop}><Text numberOfLines={1} style={styles.client}>{client}</Text><Text style={styles.status}>{appointmentStatusLabel(item.estado)}</Text></View><Text style={styles.service}>{String(item.servicioNombre ?? "Servicio")}{item.empleadoNombre ? ` · ${String(item.empleadoNombre)}` : ""}</Text><Text style={styles.date}>{when}</Text></View>;
 }
 function formatMinutes(value: number) { const total = Math.round(value); const hours = Math.floor(total / 60); const minutes = total % 60; return hours > 0 ? `${hours} h ${String(minutes).padStart(2, "0")} min` : `${minutes} min`; }
 function Empty({ icon, title, text }: { icon: React.ReactNode; title: string; text: string }) {

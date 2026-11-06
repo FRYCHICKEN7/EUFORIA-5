@@ -38,6 +38,20 @@ export type AppointmentRecord = DocumentData & {
   completedAt?: unknown;
 };
 
+export function appointmentStatusLabel(status: string): string {
+  switch (status) {
+    case "hold": return "Esperando respuesta";
+    case "pendiente_de_aprobacion": return "Pendiente de confirmar";
+    case "confirmada": return "Confirmada";
+    case "en_curso": return "En servicio";
+    case "completada": return "Finalizada";
+    case "cancelada": return "Cancelada";
+    case "rechazada": return "Rechazada";
+    case "expirada": return "Venció";
+    default: return "Pendiente";
+  }
+}
+
 function numberOrNull(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
   if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
@@ -45,7 +59,7 @@ function numberOrNull(value: unknown): number | null {
 }
 
 export async function loadBusinesses(): Promise<BusinessRecord[]> {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const snapshot = await getDocs(collection(db, "negocios"));
   return snapshot.docs
     .map((item) => {
@@ -57,7 +71,7 @@ export async function loadBusinesses(): Promise<BusinessRecord[]> {
 }
 
 export async function loadServices(businessId: string, includeInactive = false): Promise<ServiceRecord[]> {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const snapshot = await getDocs(collection(db, "negocios", businessId, "servicios"));
   return snapshot.docs
     .map((item) => {
@@ -75,7 +89,7 @@ export async function loadServices(businessId: string, includeInactive = false):
 }
 
 export async function getAvailableEmployeeSlots(input: { negocioId: string; servicioId: string; fecha: string }): Promise<AppointmentAvailability> {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<typeof input, AppointmentAvailability>(functions, "obtenerDisponibilidad");
   const result = await callable(input);
   return result.data;
@@ -86,20 +100,20 @@ function mapAppointments(snapshot: { docs: Array<{ id: string; data: () => Docum
 }
 
 export function subscribeAdminAppointments(next: (items: AppointmentRecord[]) => void, error: (reason: Error) => void): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const since = Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const appointmentsQuery = query(collection(db, "citas"), where("inicio", ">=", since), orderBy("inicio", "asc"), limit(500));
   return onSnapshot(appointmentsQuery, (snapshot) => next(mapAppointments(snapshot)), error);
 }
 
 export function subscribeClientAppointments(uid: string, next: (items: AppointmentRecord[]) => void, error: (reason: Error) => void): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const appointmentsQuery = query(collection(db, "citas"), where("clienteId", "==", uid), orderBy("inicio", "asc"), limit(200));
   return onSnapshot(appointmentsQuery, (snapshot) => next(mapAppointments(snapshot)), error);
 }
 
 export function subscribeEmployeeAppointments(uid: string, next: (items: AppointmentRecord[]) => void, error: (reason: Error) => void): Unsubscribe {
-  if (!db) throw new Error("Firebase no está configurado.");
+  if (!db) throw new Error("El servicio no está disponible.");
   const since = Timestamp.fromMillis(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const appointmentsQuery = query(collection(db, "citas"), where("empleadoUid", "==", uid), where("inicio", ">=", since), orderBy("inicio", "asc"), limit(500));
   return onSnapshot(appointmentsQuery, (snapshot) => next(mapAppointments(snapshot)), error);
@@ -120,35 +134,35 @@ export function appointmentMillis(value: unknown): number | null {
 }
 
 export async function reserveAppointment(input: { negocioId: string; servicioId: string; inicio: string; empleadoId: string; notas?: string }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const reserve = httpsCallable<typeof input, { citaId: string; estado: string; holdExpiresAt: string }>(functions, "reservarCita");
   const result = await reserve(input);
   return result.data;
 }
 
 export async function decideAppointment(action: "aprobarCita" | "rechazarCita", citaId: string) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const decide = httpsCallable<{ citaId: string }, { ok: true; estado: string }>(functions, action);
   const result = await decide({ citaId });
   return result.data;
 }
 
 export async function startService(citaId: string) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<{ citaId: string }, { ok: true }>(functions, "iniciarServicio");
   const result = await callable({ citaId });
   return result.data;
 }
 
 export async function finishService(citaId: string) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("Firebase Functions no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<{ citaId: string }, { ok: true; duracionRealMin: number }>(functions, "finalizarServicio");
   const result = await callable({ citaId });
   return result.data;
 }
 
 export async function saveService(input: { businessId: string; id?: string; nombre: string; descripcion: string; precio: number; duracionMin: number; activo: boolean }) {
-  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("Firebase no está configurado.");
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const { businessId, id, ...data } = input;
   const payload = { ...data, updatedAt: serverTimestamp() };
   if (id) {
