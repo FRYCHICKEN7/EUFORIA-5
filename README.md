@@ -154,7 +154,7 @@ Las verificaciones locales de esta actualización: TypeScript y lint sin errores
 
 ## Pendientes fuera de esta fase
 
-- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado; la Function nueva `enviarPushExpo` tampoco se ha desplegado.
+- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado; la Function `prepararNegocioInicial`, la promoción de empleado y `enviarPushExpo` no se han desplegado.
 - Asociar proyecto EAS, configurar FCM V1/APNs, credenciales nativas y build firmado para que push llegue al teléfono con la app cerrada.
 - Crear negocio/horarios/servicios reales; promover desde administración las cuentas de empleados registradas como clientes.
 - Gestión de feriados, descansos múltiples y disponibilidad variable por fecha, historial integral, cancelación/reprogramación completa y exportación.
