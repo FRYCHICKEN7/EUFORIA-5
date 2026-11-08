@@ -28,6 +28,9 @@ function ServicesContent() {
   const [hours, setHours] = useState("0");
   const [minutes, setMinutes] = useState("30");
   const [active, setActive] = useState(true);
+  const [returnReminder, setReturnReminder] = useState(false);
+  const [returnPeriodDays, setReturnPeriodDays] = useState("30");
+  const [returnLeadDays, setReturnLeadDays] = useState("3");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -73,7 +76,7 @@ function ServicesContent() {
   };
 
   const resetForm = () => {
-    setServiceId(""); setName(""); setDescription(""); setPrice(""); setHours("0"); setMinutes("30"); setActive(true); setMessage(""); setError("");
+    setServiceId(""); setName(""); setDescription(""); setPrice(""); setHours("0"); setMinutes("30"); setActive(true); setReturnReminder(false); setReturnPeriodDays("30"); setReturnLeadDays("3"); setMessage(""); setError("");
   };
 
   const editService = (service: ServiceRecord) => {
@@ -85,6 +88,9 @@ function ServicesContent() {
     setHours(String(Math.floor(duration / 60)));
     setMinutes(String(duration % 60));
     setActive(service.activo);
+    setReturnReminder(service.recordatorioRegresoActivo === true);
+    setReturnPeriodDays(String(service.periodoRegresoDias ?? 30));
+    setReturnLeadDays(String(service.anticipacionRecordatorioDias ?? 3));
     setMessage(""); setError("");
   };
 
@@ -96,10 +102,13 @@ function ServicesContent() {
     if (!name.trim()) { setError("Escribe el nombre del servicio."); return; }
     if (!Number.isFinite(numericPrice) || numericPrice < 0) { setError("Escribe un precio numérico válido en lempiras."); return; }
     if (!Number.isInteger(totalMinutes) || totalMinutes < 5 || totalMinutes > 480 || Number(minutes) > 59 || Number(minutes) < 0) { setError("La duración debe ser de 5 a 480 minutos; minutos entre 0 y 59."); return; }
+    const returnPeriod = Number(returnPeriodDays);
+    const returnLead = Number(returnLeadDays);
+    if (returnReminder && (!Number.isInteger(returnPeriod) || returnPeriod < 1 || returnPeriod > 730 || !Number.isInteger(returnLead) || returnLead < 0 || returnLead > returnPeriod)) { setError("Indica un periodo de regreso de 1 a 730 días y una anticipación entre 0 y ese periodo."); return; }
     setSaving(true);
     try {
       const wasEditing = Boolean(serviceId);
-      await saveService({ businessId, id: serviceId || undefined, nombre: name.trim(), descripcion: description.trim(), precio: numericPrice, duracionMin: totalMinutes, activo: active });
+      await saveService({ businessId, id: serviceId || undefined, nombre: name.trim(), descripcion: description.trim(), precio: numericPrice, duracionMin: totalMinutes, activo: active, recordatorioRegresoActivo: returnReminder, periodoRegresoDias: Number.isInteger(returnPeriod) ? returnPeriod : 30, anticipacionRecordatorioDias: Number.isInteger(returnLead) ? returnLead : 3 });
       const items = await loadServices(businessId, true);
       setServices(items);
       resetForm();
@@ -123,13 +132,15 @@ function ServicesContent() {
             <Text style={styles.label}>Precio · lempiras</Text><View style={styles.moneyInput}><Text style={styles.currency}>L.</Text><TextInput value={price} onChangeText={setPrice} keyboardType="decimal-pad" placeholder="120.00" placeholderTextColor={BRAND.muted} style={styles.moneyText} /></View>
             <Text style={styles.label}>Tiempo estimado</Text><View style={styles.durationRow}><View style={styles.durationField}><TextInput value={hours} onChangeText={setHours} keyboardType="number-pad" maxLength={2} style={styles.durationInput} /><Text style={styles.durationSuffix}>horas</Text></View><View style={styles.durationField}><TextInput value={minutes} onChangeText={setMinutes} keyboardType="number-pad" maxLength={2} style={styles.durationInput} /><Text style={styles.durationSuffix}>min</Text></View><Text style={styles.durationPreview}>{estimatedTime}</Text></View>
             <Text style={styles.conversion}>Ejemplo: 1 hora y 30 minutos.</Text>
+            <Text style={styles.label}>Recordatorio para regresar</Text><Pressable accessibilityRole="checkbox" accessibilityState={{ checked: returnReminder }} onPress={() => setReturnReminder((value) => !value)} style={styles.activeRow}><View style={[styles.checkbox, returnReminder && styles.checkboxActive]}>{returnReminder ? <Text style={styles.checkmark}>✓</Text> : null}</View><Text style={styles.activeText}>{returnReminder ? "Activo para este servicio" : "Sin recordatorio de regreso"}</Text></Pressable>
+            {returnReminder ? <><Text style={styles.label}>Periodo entre visitas · días</Text><TextInput value={returnPeriodDays} onChangeText={(value) => setReturnPeriodDays(value.replace(/\D/g, ""))} keyboardType="number-pad" maxLength={3} placeholder="30" style={styles.input} /><Text style={styles.label}>Avisar con anticipación · días</Text><TextInput value={returnLeadDays} onChangeText={(value) => setReturnLeadDays(value.replace(/\D/g, ""))} keyboardType="number-pad" maxLength={3} placeholder="3" style={styles.input} /><Text style={styles.conversion}>El aviso se calcula desde que el servicio queda finalizado.</Text></> : null}
             <Pressable accessibilityRole="checkbox" accessibilityState={{ checked: active }} onPress={() => setActive((value) => !value)} style={styles.activeRow}><View style={[styles.checkbox, active && styles.checkboxActive]}>{active ? <Text style={styles.checkmark}>✓</Text> : null}</View><Text style={styles.activeText}>{active ? "Activo para reservas" : "Inactivo: no aparece a clientes"}</Text></Pressable>
             {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}{message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
             <Pressable disabled={saving} onPress={() => void save()} style={[styles.saveButton, saving && styles.disabled]}><Text style={styles.saveText}>{saving ? "Guardando…" : serviceId ? "Guardar cambios" : "Guardar servicio"}</Text></Pressable>
             {serviceId ? <Pressable onPress={resetForm} style={styles.cancel}><Text style={styles.cancelText}>Cancelar edición</Text></Pressable> : null}
           </View>
           <View style={styles.listHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Servicios guardados</Text><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>{services.length} registros</Text></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando catálogo…</Text></View> : services.length === 0 ? <View style={styles.empty}><Scissors size={24} color={BRAND.primary} /><Text style={styles.emptyText}>Aún no hay servicios. Agrega el primero en el formulario anterior.</Text></View> : services.map((service) => <Pressable key={service.id} onPress={() => editService(service)} style={styles.serviceCard}><View style={styles.serviceIcon}><Scissors size={17} color={BRAND.primaryDark} /></View><View style={styles.serviceCopy}><Text style={styles.serviceName}>{service.nombre}</Text><View style={styles.serviceMeta}><Text style={styles.hint}>{service.precio === null ? "Precio pendiente" : `L. ${service.precio.toLocaleString("es-HN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</Text><Clock3 size={12} color={BRAND.muted} /><Text style={styles.hint}>{service.duracionMin ? formatDuration(service.duracionMin) : "Duración pendiente"}</Text></View><Text style={[styles.stateTag, service.activo ? styles.activeTag : styles.inactiveTag]}>{service.activo ? "Activo" : "Inactivo"}</Text></View><Pencil size={16} color={BRAND.muted} /></Pressable>)}
+          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando catálogo…</Text></View> : services.length === 0 ? <View style={styles.empty}><Scissors size={24} color={BRAND.primary} /><Text style={styles.emptyText}>Aún no hay servicios. Agrega el primero en el formulario anterior.</Text></View> : services.map((service) => <Pressable key={service.id} onPress={() => editService(service)} style={styles.serviceCard}><View style={styles.serviceIcon}><Scissors size={17} color={BRAND.primaryDark} /></View><View style={styles.serviceCopy}><Text style={styles.serviceName}>{service.nombre}</Text><View style={styles.serviceMeta}><Text style={styles.hint}>{service.precio === null ? "Precio pendiente" : `L. ${service.precio.toLocaleString("es-HN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`}</Text><Clock3 size={12} color={BRAND.muted} /><Text style={styles.hint}>{service.duracionMin ? formatDuration(service.duracionMin) : "Duración pendiente"}</Text></View>{service.recordatorioRegresoActivo ? <Text style={styles.hint}>Aviso para regresar: {service.periodoRegresoDias ?? "—"} días</Text> : null}<Text style={[styles.stateTag, service.activo ? styles.activeTag : styles.inactiveTag]}>{service.activo ? "Activo" : "Inactivo"}</Text></View><Pencil size={16} color={BRAND.muted} /></Pressable>)}
         </ScrollView>
       </ScreenContainer>
     </AuthGate>

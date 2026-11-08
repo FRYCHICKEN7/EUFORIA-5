@@ -4,6 +4,18 @@ import { FieldValue, getFirestore, Timestamp, type DocumentData, type Transactio
 import { HttpsError, onCall, type CallableRequest } from "firebase-functions/v2/https";
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
+export {
+  actualizarRecordatorioWhatsApp,
+  aprobarSolicitudEmpleado,
+  cancelarRecordatoriosWhatsAppExcluidos,
+  cancelarRecordatoriosWhatsAppExcluidosLegacy,
+  guardarConfiguracionRecordatoriosWhatsApp,
+  prepararRecordatoriosCumpleanos,
+  rechazarSolicitudEmpleado,
+  solicitarPerfilEmpleado,
+  sincronizarRecordatoriosCitas,
+  sincronizarRecordatoriosServicios,
+} from "./reminders";
 import {
   computeAvailableSlots,
   hondurasDayBounds,
@@ -265,89 +277,10 @@ export const prepararNegocioInicial = onCall(async (request) => {
 export const crearPerfilEmpleado = onCall<PromoteEmployeeInput>(async (request) => {
   const adminUid = request.auth?.uid;
   if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión como administrador.");
-  const uid = requiredString(request.data?.uid, "UID de Authentication", 128);
-  const negocioId = requiredString(request.data?.negocioId, "Negocio", 128);
-  const employeeCode = requiredString(request.data?.Empleado, "Código de empleado", 30);
-  if (!/^[A-Za-z0-9_-]+$/.test(employeeCode)) throw new HttpsError("invalid-argument", "El código de empleado solo puede incluir letras, números, guion y guion bajo.");
-  const authUser = await getAuth(app).getUser(uid).catch((error: unknown) => {
-    const code = (error as { code?: string })?.code;
-    if (code === "auth/user-not-found") throw new HttpsError("failed-precondition", "La persona debe registrarse primero con ese UID en Firebase Authentication.");
-    throw new HttpsError("internal", "No se pudo verificar la cuenta de Firebase Authentication.");
-  });
-  if (authUser.disabled || !authUser.email) throw new HttpsError("failed-precondition", "La cuenta debe estar habilitada y tener correo en Firebase Authentication.");
-  const authEmail = authUser.email.trim();
-
-  const businessRef = db.collection("negocios").doc(negocioId);
-  const employeeProfileRef = db.collection("empleados").doc(uid);
-  const businessEmployeeRef = businessRef.collection("empleados").doc(uid);
-  const duplicateQuery = db.collection("empleados").where("Empleado", "==", employeeCode).limit(2);
-  const now = Timestamp.now();
-
-  await db.runTransaction(async (transaction) => {
-    const [admin, customer, businessSnapshot, alreadyEmployee, duplicateCodes] = await Promise.all([
-      loadProfileInTransaction(transaction, adminUid),
-      loadProfileInTransaction(transaction, uid),
-      transaction.get(businessRef),
-      transaction.get(employeeProfileRef),
-      transaction.get(duplicateQuery),
-    ]);
-    if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "Solo administración puede crear perfiles de empleado.");
-    if (!customer.profile || customer.role !== "cliente") throw new HttpsError("failed-precondition", "Primero la persona debe registrarse o tener un perfil cliente con el mismo UID.");
-    if (!businessSnapshot.exists || businessSnapshot.data()?.activo !== true) throw new HttpsError("failed-precondition", "Selecciona un negocio activo.");
-    validBusinessMode(businessSnapshot.data() ?? {});
-    if (alreadyEmployee.exists) throw new HttpsError("already-exists", "Esta cuenta ya tiene un perfil de empleado.");
-    if (duplicateCodes.docs.some((item) => item.id !== uid)) throw new HttpsError("already-exists", "Ese código de empleado ya está asignado.");
-
-    const source = customer.profile;
-    const email = authEmail;
-    const name = String(source.name ?? source.displayName ?? source.nombre ?? "").trim();
-    if (!email || name.length < 2) throw new HttpsError("failed-precondition", "El perfil cliente necesita correo y nombre antes de activarse como empleado.");
-    const profileImage = String(source.profileImage ?? source.photoURL ?? "");
-    const employeeProfile: DocumentData = {
-      Empleado: employeeCode,
-      email,
-      id: uid,
-      name,
-      displayName: name,
-      profileImage,
-      role: "empleado",
-      rol: "empleado",
-      negocioId,
-      activo: true,
-      publica: true,
-      disponible: false,
-      createdAt: now,
-      updatedAt: now,
-    };
-    const appProfile: DocumentData = {
-      id: uid,
-      email,
-      name,
-      displayName: name,
-      profileImage,
-      ...(typeof source.phone === "string" && source.phone ? { phone: source.phone } : {}),
-      ...(Number.isInteger(source.birthdayDay) && Number.isInteger(source.birthdayMonth)
-        ? { birthdayDay: source.birthdayDay, birthdayMonth: source.birthdayMonth }
-        : {}),
-      role: "empleado",
-      rol: "empleado",
-      negocioId,
-      createdAt: source.createdAt ?? now,
-      updatedAt: now,
-    };
-    // Normalize both user collections so the Auth listener and legacy readers agree.
-    transaction.set(db.collection("users").doc(uid), appProfile, { merge: true });
-    transaction.set(db.collection("usuarios").doc(uid), appProfile, { merge: true });
-    transaction.set(employeeProfileRef, employeeProfile);
-    transaction.set(businessEmployeeRef, {
-      ...employeeProfile,
-      usuarioId: uid,
-      uid,
-      nombre: name,
-      createdAt: now,
-    });
-  });
-  return { ok: true as const, empleadoId: uid, codigo: employeeCode };
+  const admin = await loadProfile(adminUid);
+  if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "Solo administración puede revisar solicitudes.");
+  // Keep the old callable name deployed, but never allow it to create or promote an employee.
+  throw new HttpsError("failed-precondition", "La persona debe registrarse como empleado; administración solo puede aceptar o rechazar su solicitud.");
 });
 
 export const guardarDisponibilidadEmpleado = onCall<EmployeeAvailabilityInput>(async (request) => {
@@ -468,6 +401,7 @@ export const reservarCita = onCall<ReserveInput>(async (request) => {
   const serviceRef = businessRef.collection("servicios").doc(servicioId);
   const businessEmployeeRef = businessRef.collection("empleados").doc(empleadoId);
   const appointmentRef = db.collection("citas").doc();
+  const clientNoticeRef = db.collection("notificaciones").doc();
   const employeeNoticeRef = db.collection("notificaciones").doc();
   let holdExpiresAt = Timestamp.fromMillis(Date.now() + HOLD_DURATION_MS);
 
@@ -517,7 +451,7 @@ export const reservarCita = onCall<ReserveInput>(async (request) => {
       clienteId: uid,
       clienteEmail: String(request.auth?.token.email ?? customerProfile.email ?? ""),
       clienteNombre: String(customerProfile.name ?? customerProfile.displayName ?? request.auth?.token.name ?? "Cliente"),
-      clienteTelefono: String(customerProfile.phone ?? ""),
+      clienteTelefono: String(customerProfile.phone ?? customerProfile.telefono ?? ""),
       servicioId,
       servicioNombre: String(service.nombre ?? service.name ?? "Servicio"),
       precio: price,
@@ -535,7 +469,24 @@ export const reservarCita = onCall<ReserveInput>(async (request) => {
       ...(notes ? { notas: notes } : {}),
     };
     const adminUids = await adminRecipientUids(transaction);
+    const appointmentDateLabel = new Date(selectedSlot.inicioMs).toLocaleString("es-HN", {
+      timeZone: HONDURAS_TIME_ZONE,
+      day: "numeric",
+      month: "long",
+      hour: "numeric",
+      minute: "2-digit",
+    });
     transaction.set(appointmentRef, booking);
+    transaction.set(clientNoticeRef, {
+      destinatarioId: uid,
+      tipo: "solicitud_cita_recibida",
+      titulo: "Recibimos tu solicitud",
+      cuerpo: `Tu solicitud para ${String(service.nombre ?? "un servicio")} con ${staffName} el ${appointmentDateLabel} quedó pendiente de confirmación.`,
+      citaId: appointmentRef.id,
+      negocioId,
+      createdAt: Timestamp.fromMillis(nowMs),
+      leida: false,
+    });
     transaction.set(employeeNoticeRef, {
       destinatarioId: employeeUid,
       tipo: "nueva_solicitud_cita",

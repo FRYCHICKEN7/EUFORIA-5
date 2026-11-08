@@ -9,6 +9,7 @@ import {
   query,
   updateDoc,
   where,
+  writeBatch,
   type DocumentData,
   type Unsubscribe,
 } from "firebase/firestore";
@@ -29,6 +30,17 @@ export async function loadUserProfile(uid: string): Promise<ProfileRecord | null
     ? [sourceRecord(PROFILE_COLLECTIONS[index], uid, snapshot.data())]
     : []);
   return mergeProfileSources(records);
+}
+
+export async function setWhatsAppReminderConsent(uid: string, enabled: boolean) {
+  if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
+  const references = [doc(db, "users", uid), doc(db, "usuarios", uid)];
+  const snapshots = await Promise.all(references.map((reference) => getDoc(reference)));
+  const existing = references.filter((_, index) => snapshots[index]?.exists());
+  if (existing.length === 0) throw new Error("No encontramos el perfil para guardar tu preferencia.");
+  const batch = writeBatch(db);
+  existing.forEach((reference) => batch.update(reference, { aceptaRecordatoriosWhatsApp: enabled }));
+  await batch.commit();
 }
 
 /** Listen to every source; a denied source fails closed to avoid overlooking a conflicting role. */
@@ -73,6 +85,7 @@ export type CustomerProfile = ProfileRecord & {
   telefono?: string;
   birthdayDay?: number;
   birthdayMonth?: number;
+  aceptaRecordatoriosWhatsApp?: boolean;
   profileImage?: string;
   createdAt?: unknown;
   _profileSource?: string;
@@ -127,6 +140,45 @@ export function subscribeAdminClients(
   return () => subscriptions.forEach((unsubscribe) => unsubscribe());
 }
 
+export type PendingEmployeeRequest = {
+  id: string;
+  name?: string;
+  displayName?: string;
+  nombre?: string;
+  email?: string;
+  phone?: string;
+  telefono?: string;
+  estadoSolicitud?: string;
+};
+
+export function subscribePendingEmployeeRequests(
+  next: (requests: PendingEmployeeRequest[]) => void,
+  error: (reason: Error) => void,
+): Unsubscribe {
+  if (!db) throw new Error("El servicio no está disponible.");
+  return onSnapshot(query(collection(db, "empleados"), where("estadoSolicitud", "==", "pendiente")), (snapshot) => {
+    next(snapshot.docs.map((item) => ({ ...item.data(), id: item.id })) as PendingEmployeeRequest[]);
+  }, error);
+}
+
+export async function solicitarPerfilEmpleado() {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<Record<string, never>, { ok: true }>(functions, "solicitarPerfilEmpleado");
+  return (await callable({})).data;
+}
+
+export async function aprobarSolicitudEmpleado(input: { uid: string }) {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<typeof input, { ok: true }>(functions, "aprobarSolicitudEmpleado");
+  return (await callable(input)).data;
+}
+
+export async function rechazarSolicitudEmpleado(input: { uid: string }) {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<typeof input, { ok: true }>(functions, "rechazarSolicitudEmpleado");
+  return (await callable(input)).data;
+}
+
 export type EmployeeProfile = {
   id: string;
   email?: string;
@@ -167,13 +219,6 @@ export function subscribeNotifications(uid: string, next: (items: AppNotificatio
 export async function markNotificationRead(id: string) {
   if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   await updateDoc(doc(db, "notificaciones", id), { leida: true });
-}
-
-export async function createEmployeeProfile(input: { uid: string; negocioId: string; Empleado: string }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<typeof input, { ok: true; empleadoId: string; codigo: string }>(functions, "crearPerfilEmpleado");
-  const result = await callable(input);
-  return result.data;
 }
 
 export async function createInitialBusiness() {

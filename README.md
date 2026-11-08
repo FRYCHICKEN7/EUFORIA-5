@@ -4,13 +4,13 @@ Aplicación móvil Expo Router / React Native / TypeScript para clientes, emplea
 
 ## Estado y límites de esta entrega
 
-El código implementa login y registro de clientes, perfiles Firebase compatibles con la colección antigua `users` y la colección de app `usuarios`, lista administrativa de clientes, activación de empleados a partir de cuentas existentes, catálogo de servicios con duración, turnos semanales de empleado, cálculo seguro de franjas libres, reservas con control de conflictos, confirmación/rechazo, inicio/final del trabajo y métricas de tiempo real.
+El código implementa login y registro de clientes, perfiles compatibles con `users` y `usuarios`, solicitudes de ingreso de empleados con decisión administrativa **Aceptar/Rechazar**, catálogo de servicios con duración y periodos de regreso, turnos semanales, disponibilidad segura, reservas sin solapamientos, medición de servicios, recordatorios de WhatsApp preparados manualmente y copias locales para el teléfono.
 
 En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino usan texto blanco; las tarjetas claras conservan su tipografía oscura. Las instrucciones de Firebase de esta guía son manuales: esta entrega no ejecuta despliegues.
 
 **No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
-Los avisos de citas/servicios se guardan en Firestore para cliente, empleado y administración y el código incluye registro de Expo Push y envío desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar Rules/Functions manualmente; no se simuló una entrega.
+Los avisos de citas/servicios se guardan para cliente, empleado asignado y administración y el código incluye registro de avisos al teléfono desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar Rules/Functions manualmente; no se simuló una entrega.
 
 ## Roles y perfiles
 
@@ -37,7 +37,21 @@ Después de autenticar por correo/contraseña, cada perfil puede activar biometr
 
 ### WhatsApp manual
 
-En la tarjeta de un cliente con número válido, administración puede tocar **WhatsApp**. Para un número hondureño de ocho dígitos se abre `https://wa.me/504XXXXXXXX`; si ya contiene `504` se conserva, y un número internacional con `+` se normaliza a solo dígitos. El botón abre el chat para que la persona redacte y decida enviar; no conecta WhatsApp Business, no manda mensajes automáticamente y no crea mensajes preescritos.
+En la tarjeta de un cliente con número válido, administración puede tocar **WhatsApp**. Para un número hondureño de ocho dígitos se abre `https://wa.me/504XXXXXXXX`; si ya contiene `504` se conserva, y un número internacional con `+` se normaliza a solo dígitos. El botón abre el chat para que administración revise y decida enviar; no conecta WhatsApp Business y no manda mensajes automáticamente.
+
+### Recordatorios preparados por administración
+
+La pantalla **Avisar por WhatsApp** reúne citas confirmadas, regresos recomendados y cumpleaños del día. El aviso de cita queda habilitado por defecto **73 horas antes** y administración puede ajustar el plazo. También puede editar el texto para cada tipo; la pantalla ofrece botones para insertar datos del perfil, la cita, el servicio o el negocio. Los textos y el plazo se guardan en `negocios/{negocioId}.configuracionRecordatoriosWhatsApp`.
+
+Los perfiles nuevos aceptan estos avisos por defecto; los perfiles antiguos sin la preferencia también se consideran habilitados. Cada cliente puede pausarlos desde su catálogo. Solo se preparan avisos para citas confirmadas; una cancelación o cambio de horario actualiza el registro anterior. El aviso de regreso parte de `completedAt` y de la configuración del servicio; si no hay periodo de regreso, no se crea. Los cumpleaños usan el día y mes del perfil, sin año de nacimiento. A las personas que cumplen el 29 de febrero se les recuerda el 28 de febrero en años no bisiestos.
+
+Los registros se guardan una sola vez en `recordatoriosWhatsApp` con estados `pendiente`, `preparado`, `enviado`, `omitido` o `cancelado`. Abrir WhatsApp no confirma que el mensaje se envió; administración debe marcar **Confirmar envío** después de enviarlo desde el teléfono. No se abre WhatsApp ni se envía ningún mensaje de manera automática, desde una tarea programada o desde la vista previa.
+
+Al solicitar una cita se registra un aviso dentro de la app para el cliente, el profesional asignado y administración. La recepción como aviso push con la app cerrada requiere tokens de dispositivo y credenciales nativas configuradas; no está comprobada hasta probarla en teléfonos con el build correspondiente.
+
+### Copia local en el teléfono
+
+Desde **Ajustes → Copias de seguridad**, administración puede guardar una copia de negocio con perfiles, servicios, horarios, equipo, clientes, citas y avisos. En Android se elige una carpeta del teléfono; en iPhone se abre la hoja del sistema y se elige **Guardar en Archivos**. La app no sube la copia a un servidor y excluye identidad, contraseñas, claves y tokens de notificación. Protege el archivo como información privada del salón. La restauración no forma parte de esta opción.
 
 ### Notificaciones por cuenta y preparación Expo Push
 
@@ -53,13 +67,13 @@ Para recibir avisos con la app cerrada, una persona administradora del proyecto 
 
 Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado pendiente y la bandeja Firestore continúa siendo la fuente de avisos dentro de EUFORIA. No se desplegaron reglas ni funciones en esta tarea.
 
-### Alta segura de empleado
+### Solicitud y aprobación de empleado
 
-1. La persona se registra desde **Regístrate** usando su correo y contraseña; su rol inicial queda como cliente.
-2. Administración abre **Clientes y equipo**, verifica que es la cuenta correcta, elige un negocio activo y escribe un código válido. Si todavía no existe un negocio activo, puede crearlo desde esa misma pantalla como **EUFORIA Beauty Studio**; si hay uno solo, se elige automáticamente.
-3. **Crear perfil de empleado** invoca la Cloud Function `crearPerfilEmpleado`. La Function vuelve a comprobar el rol admin, verifica que el UID exista y tenga correo habilitado en Firebase Authentication, comprueba el perfil cliente y el negocio, y luego sincroniza `users/{uid}` y `usuarios/{uid}` con el rol empleado.
-4. La Function crea `empleados/{uid}` y `negocios/{negocioId}/empleados/{uid}` con `Empleado`, `email`, `id` igual al UID, `name`, `profileImage`, `role/rol: "empleado"`, `activo: true`, `publica: true` y `disponible: false`. No se agrega una cuenta Auth inventada ni se guarda una contraseña desde administración.
-5. El empleado entra por la opción **Empleado**, abre **Mi agenda → Editar mi disponibilidad semanal**, habilita cada día, guarda inicio/fin y marca **Disponible para citas**. Los valores iniciales 08:00–17:00 son solo una sugerencia del formulario y no se escriben hasta guardar.
+1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos de la cuenta. Se crea primero un perfil cliente y se envía una solicitud; el perfil no obtiene acceso al área del equipo mientras esté pendiente.
+2. **Clientes y equipo** muestra solicitudes pendientes. Administración solo puede **Aceptar** o **Rechazar**; ya no registra empleados ni asigna códigos manualmente.
+3. Las funciones verifican el rol administrativo y la solicitud. Si se acepta, se asigna el único negocio activo; si no existe, se crea **EUFORIA Beauty Studio** activo. Si hay varios negocios activos, la aceptación se detiene para evitar asignar al negocio equivocado. El rol empleado y la membresía del negocio se guardan únicamente después de aceptar.
+4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
+5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.
 
 ## Firestore: datos del negocio
 
@@ -70,6 +84,9 @@ negocios/{negocioId}
   nombre: string
   activo: true
   modoNegocio: "unipersonal" | "multiEmpleado"
+  configuracionRecordatoriosWhatsApp:
+    horasAntesCita: 73 (valor inicial)
+    plantillas: { cita, regreso, cumpleanos }
 
 negocios/{negocioId}/servicios/{servicioId}
   nombre: string
@@ -77,6 +94,9 @@ negocios/{negocioId}/servicios/{servicioId}
   precio: number
   duracionMin: integer entre 5 y 480
   activo: true
+  recordatorioRegresoActivo: boolean
+  periodoRegresoDias: integer opcional
+  anticipacionRecordatorioDias: integer opcional
 
 negocios/{negocioId}/horarios/{dia}
   activo: true
@@ -107,10 +127,10 @@ El catálogo se mantiene desde **Resumen → Servicios y tiempos estimados**. Ej
 
 1. El cliente selecciona servicio, fecha, empleado y una hora devuelta por `obtenerDisponibilidad` (callable). El servidor calcula horas en `America/Tegucigalpa`, en incrementos de 15 minutos. No incluye horas pasadas, recesos, ni un servicio que no quepa completo dentro del turno.
 2. El cálculo excluye solapamientos del mismo empleado con citas `hold` vigentes, `pendiente_de_aprobacion`, `confirmada` o `en_curso`. Si alguien ocupa el horario después de cargar la lista, `reservarCita` vuelve a comprobarlo dentro de una transacción; ante conflicto rechaza y la app vuelve a cargar las franjas libres.
-3. Una nueva solicitud queda como `hold` temporal por 30 minutos y genera un aviso Firestore `nueva_solicitud_cita`. El empleado asignado la recibe en la agenda en vivo y puede confirmar o rechazar. Al confirmar, el estado pasa a `confirmada` y el cliente ve la cita en su propio listener en vivo. `expirarHolds` retira reservas temporales vencidas cada cinco minutos.
+3. Una nueva solicitud queda como `hold` temporal por 30 minutos y genera avisos en la app al cliente, al empleado asignado y a todos los administradores válidos. El empleado la recibe en la agenda y puede confirmar o rechazar. Al confirmar, el estado pasa a `confirmada`, el cliente ve la cita en su propio listener y se programa el recordatorio. `expirarHolds` retira reservas temporales vencidas cada cinco minutos. La notificación push con la app cerrada depende de la configuración descrita arriba.
 4. El empleado asignado pulsa **Inicio de servicio**: Functions registra `startedAt` con la hora del servidor y cambia a `en_curso`. Al pulsar **Servicio finalizado**, registra `completedAt`, cambia a `completada` y calcula `duracionRealMin`. El panel administrativo muestra promedio real y cantidad de trabajos completados por empleado/servicio.
 
-La escritura directa de citas, promociones de rol, disponibilidad y transiciones sensibles está bloqueada por las reglas; se hace mediante funciones autorizadas. Las consultas de agenda respetan cliente/empleado/administración. `firestore.indexes.json` incluye el índice de cliente e inicio, agendas por profesional y el listener de avisos.
+La escritura directa de citas, decisiones de solicitudes de empleado, disponibilidad y estados del historial está bloqueada por las reglas; se hace mediante funciones autorizadas. Las consultas de agenda respetan cliente/empleado/administración. `firestore.indexes.json` incluye índices de citas, avisos, cumpleaños y sincronización de servicios.
 
 ## Desplegar Firebase manualmente
 
@@ -129,7 +149,7 @@ firebase deploy --project euforia-e76a6 --only firestore:rules
 # 3. Publicar los índices compuestos, incluido citas (clienteId ASC, inicio ASC)
 firebase deploy --project euforia-e76a6 --only firestore:indexes
 
-# 4. Publicar todas las funciones, incluida prepararNegocioInicial
+# 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
 firebase deploy --project euforia-e76a6 --only functions
 ```
 
@@ -150,12 +170,12 @@ pnpm install
 pnpm run build
 ```
 
-Las verificaciones locales de esta actualización: TypeScript y lint sin errores, 43 pruebas unitarias pasaron (1 prueba preexistente se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni verifican notificaciones/biometría en un dispositivo. Las Rules nuevas iniciaron en Firestore Emulator con el proyecto `demo-euforia` (sin conexión a Firebase real). Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió el build. Metro y el API del starter operan en los puertos 8081 y 3000; el starter gestionado se conserva.
+Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 47 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni prueban guardado local, WhatsApp o avisos nativos en un teléfono. Firestore Emulator arrancó bajo el proyecto de demostración `demo-euforia`, sin conectar con producción. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
 
 ## Pendientes fuera de esta fase
 
-- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar el rol del UID autenticado; la Function `prepararNegocioInicial`, la promoción de empleado y `enviarPushExpo` no se han desplegado.
+- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar la solicitud/aceptación/rechazo con cuentas reales; no se ha desplegado ningún recurso desde esta tarea.
 - Asociar proyecto EAS, configurar FCM V1/APNs, credenciales nativas y build firmado para que push llegue al teléfono con la app cerrada.
-- Crear negocio/horarios/servicios reales; promover desde administración las cuentas de empleados registradas como clientes.
-- Gestión de feriados, descansos múltiples y disponibilidad variable por fecha, historial integral, cancelación/reprogramación completa y exportación.
-- Probar biometría, permisos push y enlaces en un dispositivo físico después del build nativo; el preview web no verifica módulos nativos.
+- Crear negocio/horarios/servicios reales; los empleados deben enviar solicitud y administración aceptarla para activar su rol.
+- Gestión de feriados, descansos múltiples, disponibilidad variable por fecha y restauración de copias.
+- Probar permisos push, almacenamiento local y apertura/confirmación manual de WhatsApp en un dispositivo físico; la exportación web no verifica funciones nativas.

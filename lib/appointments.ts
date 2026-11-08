@@ -18,7 +18,7 @@ import { httpsCallable } from "firebase/functions";
 import { db, ensureFirebaseConfigured, functions } from "@/lib/firebase";
 
 export type BusinessRecord = { id: string; nombre: string; modoNegocio: "unipersonal" | "multiEmpleado" | null; activo: boolean };
-export type ServiceRecord = { id: string; nombre: string; descripcion: string; precio: number | null; duracionMin: number | null; activo: boolean };
+export type ServiceRecord = { id: string; nombre: string; descripcion: string; precio: number | null; duracionMin: number | null; activo: boolean; recordatorioRegresoActivo?: boolean; periodoRegresoDias?: number | null; anticipacionRecordatorioDias?: number | null };
 export type AvailableTimeSlot = { hora: string; inicio: string };
 export type EmployeeAvailability = { id: string; uid: string; Empleado: string; nombre: string; profileImage: string; slots: AvailableTimeSlot[] };
 export type AppointmentAvailability = { fecha: string; servicio: { id: string; nombre: string; precio: number; duracionMin: number }; empleados: EmployeeAvailability[] };
@@ -83,6 +83,9 @@ export async function loadServices(businessId: string, includeInactive = false):
         precio: numberOrNull(data.precio),
         duracionMin: numberOrNull(data.duracionMin),
         activo: data.activo === true,
+        recordatorioRegresoActivo: data.recordatorioRegresoActivo === true,
+        periodoRegresoDias: numberOrNull(data.periodoRegresoDias),
+        anticipacionRecordatorioDias: numberOrNull(data.anticipacionRecordatorioDias),
       };
     })
     .filter((service) => includeInactive || service.activo);
@@ -161,7 +164,7 @@ export async function finishService(citaId: string) {
   return result.data;
 }
 
-export async function saveService(input: { businessId: string; id?: string; nombre: string; descripcion: string; precio: number; duracionMin: number; activo: boolean }) {
+export async function saveService(input: { businessId: string; id?: string; nombre: string; descripcion: string; precio: number; duracionMin: number; activo: boolean; recordatorioRegresoActivo?: boolean; periodoRegresoDias?: number; anticipacionRecordatorioDias?: number }) {
   if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   const { businessId, id, ...data } = input;
   const payload = { ...data, updatedAt: serverTimestamp() };

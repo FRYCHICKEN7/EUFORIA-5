@@ -87,7 +87,8 @@ service cloud.firestore {
     function validCustomerProfile(data, uid) {
       return data.keys().hasOnly([
           'id', 'email', 'role', 'rol', 'createdAt', 'name', 'displayName',
-          'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL'
+          'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp'
         ])
         && data.keys().hasAll(['id', 'email', 'createdAt', 'phone'])
         && data.get('id', '') == uid
@@ -97,6 +98,8 @@ service cloud.firestore {
         && data.get('displayName', '') is string && data.get('displayName', '').size() <= 100
         && validPhone(data)
         && validBirthday(data)
+        && (!data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || data.get('aceptaRecordatoriosWhatsApp', true) is bool)
         && data.get('profileImage', '') is string && data.get('profileImage', '').size() <= 2048
         && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048;
     }
@@ -111,10 +114,13 @@ service cloud.firestore {
       allow update: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL'
+          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp'
         ])
         && validPhone(request.resource.data)
         && validBirthday(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
         && request.resource.data.id == resource.data.id
         && request.resource.data.email == resource.data.email
         && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
@@ -148,10 +154,13 @@ service cloud.firestore {
       allow update: if signedIn()
         && request.auth.uid == uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL'
+          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp'
         ])
         && validPhone(request.resource.data)
         && validBirthday(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
         && request.resource.data.id == resource.data.id
         && request.resource.data.email == resource.data.email
         && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
@@ -231,6 +240,12 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida'])
         && request.resource.data.leida is bool;
       allow create, delete: if false;
+    }
+
+    match /recordatoriosWhatsApp/{recordatorioId} {
+      // El historial solo es visible para administración; todas las transiciones usan Functions.
+      allow get, list: if isAdmin();
+      allow create, update, delete: if false;
     }
   }
 }

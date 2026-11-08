@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import { router } from "expo-router";
@@ -9,7 +9,7 @@ import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
 import { enrollBiometricFor, isBiometricEnrolledFor, isBiometricLoginAvailable } from "@/lib/biometrics";
 import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
-import { loadUserProfile } from "@/lib/profiles";
+import { loadUserProfile, solicitarPerfilEmpleado } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
 import { unregisterDeviceNotifications } from "@/lib/device-notifications";
 import { BirthdayPicker } from "@/components/birthday-picker";
@@ -32,6 +32,7 @@ function getAuthErrorMessage(error: unknown) {
 export default function AuthScreen() {
   const { user: activeUser, profile: activeProfile, loading: sessionLoading, isBiometricLocked, unlockSession, unlockWithBiometrics } = useAuthSession();
   const [mode, setMode] = useState<AuthMode>("login");
+  const suppressAuthRedirect = useRef(false);
   const [role, setRole] = useState<AuthRole>("cliente");
   const [staffAccessVisible, setStaffAccessVisible] = useState(false);
   const [email, setEmail] = useState("");
@@ -51,7 +52,7 @@ export default function AuthScreen() {
   const biometricRole: AuthRole = activeRole === "admin" ? "administrador" : activeRole === "empleado" ? "empleado" : "cliente";
   const selectedRole: AuthRole = isBiometricLocked ? biometricRole : role;
   useEffect(() => {
-    if (isBiometricLocked) return;
+    if (suppressAuthRedirect.current || isBiometricLocked) return;
     if (sessionLoading || !activeUser?.uid || !activeRole) return;
     if (activeRole === "admin") router.replace("/(tabs)");
     else if (activeRole === "empleado") router.replace("/employee/schedule");
@@ -93,11 +94,13 @@ export default function AuthScreen() {
         setMessage("La contraseña debe tener al menos 6 caracteres.");
         return;
       }
-      if (mode === "register" && role !== "cliente") {
-        setMessage("El registro público siempre crea un perfil cliente. Administración puede aprobar después su perfil de empleado.");
+      if (mode === "register" && role === "administrador") {
+        setMessage("El acceso de administración no admite registro desde la aplicación.");
         return;
       }
 
+      if (mode === "register") suppressAuthRedirect.current = true;
+      else suppressAuthRedirect.current = false;
       const credential = mode === "register"
         ? await createUserWithEmailAndPassword(auth, normalizedEmail, password)
         : await signInWithEmailAndPassword(auth, normalizedEmail, password);
@@ -114,6 +117,7 @@ export default function AuthScreen() {
           rol: "cliente",
           createdAt: serverTimestamp(),
           phone: normalizedPhone!,
+          aceptaRecordatoriosWhatsApp: true,
           ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
         };
         const batch = writeBatch(store);
@@ -121,6 +125,15 @@ export default function AuthScreen() {
         batch.set(doc(store, "usuarios", credential.user.uid), profileData);
         await batch.commit();
         profile = await loadUserProfile(credential.user.uid);
+        if (role === "empleado") await solicitarPerfilEmpleado();
+        await signOut(auth);
+        setMode("login");
+        setRole("cliente");
+        setStaffAccessVisible(false);
+        setMessage(role === "empleado"
+          ? "Tu cuenta está lista y la solicitud para unirte al equipo quedó pendiente de revisión. Hasta que la acepten, podrás usarla como cliente."
+          : "Tu cuenta de cliente está lista. Ya puedes iniciar sesión.");
+        return;
       }
 
       if (!profile) {
@@ -137,8 +150,21 @@ export default function AuthScreen() {
           ? storedRole === "empleado"
           : storedRole === "cliente";
       if (!roleMatches) {
+        const isPendingEmployee = selectedRoleForLogin === "empleado" && profile.estadoSolicitud === "pendiente";
+        if (selectedRoleForLogin === "empleado" && storedRole === "cliente" && !isPendingEmployee) {
+          try {
+            await solicitarPerfilEmpleado();
+            await signOut(auth);
+            setMessage("Recibimos tu solicitud para unirte al equipo. Podrás entrar como empleado cuando administración la acepte.");
+          } catch (reason) {
+            console.warn("No se pudo enviar la solicitud de empleado.", reason);
+            await signOut(auth);
+            setMessage("No pudimos enviar la solicitud. Intenta de nuevo cuando tengas conexión.");
+          }
+          return;
+        }
         await signOut(auth);
-        setMessage(storedRole === null
+        setMessage(isPendingEmployee ? "Tu solicitud de acceso al equipo está pendiente. Administración debe revisarla antes de que puedas entrar como empleado." : storedRole === null
           ? "No pudimos validar el tipo de cuenta. Contacta con administración."
           : selectedRoleForLogin === "administrador"
             ? "Esta cuenta no tiene acceso de administración."
@@ -161,17 +187,20 @@ export default function AuthScreen() {
       if (firebaseAuth?.currentUser) {
         try { await signOut(firebaseAuth); } catch { /* conserva el error original */ }
       }
+      if (mode !== "register") suppressAuthRedirect.current = false;
     } finally {
       setLoading(false);
     }
   };
 
-  const title = mode === "recovery" ? "Recupera tu acceso." : mode === "login" ? "Vuelve a sentirte bien." : "Empieza tu experiencia.";
+  const title = mode === "recovery" ? "Recupera tu acceso." : mode === "login" ? "Vuelve a sentirte bien." : role === "empleado" ? "Solicita unirte al equipo." : "Empieza tu experiencia.";
   const subtitle = mode === "recovery"
     ? "Te enviaremos un enlace seguro para crear una nueva contraseña."
     : mode === "login"
       ? "Inicia sesión como cliente. El acceso del equipo está detrás del engranaje."
-      : "Regístrate como cliente; si eres parte del equipo, administración activará tu perfil de empleado.";
+      : role === "empleado"
+        ? "Completa tus datos. Tu acceso como empleado estará disponible cuando administración acepte la solicitud."
+        : "Crea tu cuenta para consultar servicios y reservar tus citas.";
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} style={styles.screen}>
@@ -193,6 +222,11 @@ export default function AuthScreen() {
             <RoleButton label="Administrador" active={role === "administrador"} onPress={() => setRole("administrador")} />
             <RoleButton label="Empleado" active={role === "empleado"} onPress={() => setRole("empleado")} />
           </View>
+        )}
+        {mode === "login" && staffAccessVisible && role === "empleado" && !isBiometricLocked && (
+          <Pressable accessibilityRole="button" onPress={() => { setMode("register"); setMessage(""); }} style={styles.employeeRegister}>
+            <Text style={styles.switchText}>¿Aún no tienes cuenta de empleado? <Text style={styles.switchAccent}>Regístrate aquí</Text></Text>
+          </Pressable>
         )}
         {isBiometricLocked && <View style={styles.biometricCard}>
           <View style={styles.fingerprintIcon}><Fingerprint size={25} color={BRAND.primary} /></View>
@@ -223,7 +257,7 @@ export default function AuthScreen() {
         </View>
         {message ? <Text accessibilityRole="alert" style={styles.message}>{message}</Text> : null}
         <Pressable accessibilityRole="button" disabled={loading || (isBiometricLocked && sessionLoading)} onPress={() => void submit()} style={[styles.primary, (loading || (isBiometricLocked && sessionLoading)) && styles.disabled]}>
-          <Text style={styles.primaryText}>{loading ? "Procesando…" : isBiometricLocked && sessionLoading ? "Verificando sesión…" : mode === "recovery" ? "Enviar correo" : mode === "login" ? `Iniciar como ${selectedRole === "administrador" ? "administrador" : selectedRole === "empleado" ? "empleado" : "cliente"}` : "Crear cuenta cliente"}</Text>
+          <Text style={styles.primaryText}>{loading ? "Procesando…" : isBiometricLocked && sessionLoading ? "Verificando sesión…" : mode === "recovery" ? "Enviar correo" : mode === "login" ? `Iniciar como ${selectedRole === "administrador" ? "administrador" : selectedRole === "empleado" ? "empleado" : "cliente"}` : role === "empleado" ? "Enviar solicitud" : "Crear cuenta cliente"}</Text>
           <ArrowRight size={18} color="#FFFFFF" />
         </Pressable>
         {mode === "login" && <Pressable onPress={() => { setMode("recovery"); setMessage(""); }} style={styles.forgot}><Text style={styles.linkText}>¿Olvidaste tu contraseña?</Text></Pressable>}
@@ -233,7 +267,7 @@ export default function AuthScreen() {
             <Text style={styles.switchText}>{mode === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}<Text style={styles.switchAccent}>{mode === "login" ? "Regístrate" : "Inicia sesión"}</Text></Text>
           </Pressable>
         )}
-        <Text style={styles.security}>{mode === "register" ? "El registro crea una cuenta de cliente. Administración aprueba el acceso del equipo." : "Inicia sesión con tu correo y contraseña."}</Text>
+        <Text style={styles.security}>{mode === "register" ? role === "empleado" ? "Tu perfil se mantiene como cliente hasta que administración revise la solicitud." : "El acceso de administración y empleado no se elige durante el registro de cliente." : "Inicia sesión con tu correo y contraseña."}</Text>
       </View>
       <Modal visible={Boolean(pendingBiometric)} transparent animationType="fade" onRequestClose={() => { const destination = pendingBiometric?.destination; setPendingBiometric(null); if (destination) router.replace(destination as never); }}>
         <View style={styles.modalShade}><View style={styles.modalCard}>
@@ -304,6 +338,7 @@ const styles = StyleSheet.create({
   back: { flexDirection: "row", alignItems: "center", gap: 5, marginTop: 15, paddingVertical: 7 },
   backText: { color: BRAND.primaryDark, fontSize: 14, fontWeight: "800" },
   switch: { marginTop: 12, paddingVertical: 6 },
+  employeeRegister: { width: "100%", alignItems: "center", marginTop: 11, paddingVertical: 8 },
   switchText: { color: BRAND.muted, fontSize: 14 },
   switchAccent: { color: BRAND.primaryDark, fontWeight: "800" },
   security: { color: BRAND.muted, fontSize: 11, textAlign: "center", lineHeight: 16, marginTop: "auto", marginBottom: 24 },

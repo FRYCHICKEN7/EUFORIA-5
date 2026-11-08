@@ -9,7 +9,7 @@ export function normalizeWhatsAppNumber(raw: string): string | null {
   return null;
 }
 
-export function getWhatsAppUrl(raw: string): string | null {
+export function getWhatsAppUrl(raw: string, message?: string): string | null {
   const normalized = normalizeWhatsAppNumber(raw);
-  return normalized ? `https://wa.me/${normalized}` : null;
+  return normalized ? `https://wa.me/${normalized}${message === undefined ? "" : `?text=${encodeURIComponent(message)}`}` : null;
 }

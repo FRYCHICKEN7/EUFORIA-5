@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { CalendarDays, Check, Clock3, RefreshCw, Search, ShoppingBag, UserRound, X } from "lucide-react-native";
+import { Bell, CalendarDays, Check, Clock3, RefreshCw, Search, ShoppingBag, UserRound, X } from "lucide-react-native";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
@@ -9,6 +9,7 @@ import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, appointmentStatusLabel, getAvailableEmployeeSlots, loadBusinesses, loadServices, reserveAppointment, subscribeClientAppointments, type AppointmentAvailability, type AppointmentRecord, type BusinessRecord, type EmployeeAvailability, type ServiceRecord } from "@/lib/appointments";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { useThemeContext } from "@/lib/theme-provider";
+import { setWhatsAppReminderConsent } from "@/lib/profiles";
 
 function ClientCatalogContent() {
   const { user, profile } = useAuthSession();
@@ -37,8 +38,13 @@ function ClientCatalogContent() {
   const [slotStart, setSlotStart] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [notice, setNotice] = useState("");
+  const [savingReminderPreference, setSavingReminderPreference] = useState(false);
+  const [reminderPreferenceOverride, setReminderPreferenceOverride] = useState<{ uid: string; enabled: boolean } | null>(null);
   const loadingServices = Boolean(businessId) && loadedBusinessId !== businessId;
   const currentBusiness = businesses.find((business) => business.id === businessId);
+  const remindersEnabled = reminderPreferenceOverride !== null && reminderPreferenceOverride.uid === uid
+    ? reminderPreferenceOverride.enabled
+    : profile?.aceptaRecordatoriosWhatsApp !== false;
 
   useEffect(() => {
     let active = true;
@@ -124,7 +130,7 @@ function ClientCatalogContent() {
     try {
       const result = await reserveAppointment({ negocioId: currentBusiness.id, servicioId: selectedService.id, inicio: slotStart, empleadoId: selectedEmployee.id });
       setNotice(result.estado === "hold" || result.estado === "pendiente_de_aprobacion"
-        ? "Solicitud enviada. El empleado recibió un aviso dentro de la app; al confirmarla aparecerá inmediatamente en Tus citas."
+        ? "Solicitud enviada. El empleado y administración recibieron un aviso dentro de la app; al confirmarla aparecerá inmediatamente en Tus citas."
         : "Cita confirmada. Ya aparece en Tus citas.");
       setSelectedService(null);
       setAvailability(null);
@@ -151,12 +157,33 @@ function ClientCatalogContent() {
     setNotice("");
   };
 
+  const toggleWhatsAppReminders = async () => {
+    if (!uid || savingReminderPreference) return;
+    const previous = remindersEnabled;
+    const next = !previous;
+    setReminderPreferenceOverride({ uid, enabled: next });
+    setSavingReminderPreference(true);
+    setNotice("");
+    try {
+      await setWhatsAppReminderConsent(uid, next);
+      setNotice(next ? "Los recordatorios por WhatsApp están activados." : "Pausamos los recordatorios por WhatsApp. No se abrirán chats ni se enviarán mensajes automáticamente.");
+    } catch (reason) {
+      console.warn("No se pudo guardar la preferencia de WhatsApp.", reason);
+      setReminderPreferenceOverride({ uid, enabled: previous });
+      setNotice("No pudimos guardar el cambio. Intenta de nuevo.");
+    } finally { setSavingReminderPreference(false); }
+  };
+
   return (
     <AuthGate allowedRoles={["cliente"]}>
       <ScreenContainer containerClassName="bg-background" safeAreaClassName="bg-background">
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
           <View style={styles.heading}><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>SERVICIOS DE EUFORIA</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Elige tu próximo servicio</Text><Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Selecciona un servicio, un profesional y una hora libre.</Text></View>
+          <View style={styles.reminderConsent}>
+            <View style={styles.reminderCopy}><Bell size={17} color={BRAND.primary} /><View style={styles.reminderText}><Text style={styles.reminderTitle}>Recordatorios por WhatsApp</Text><Text style={styles.reminderHint}>{remindersEnabled ? "Activados · puedes pausarlos cuando quieras." : "Pausados · no prepararemos nuevos avisos."}</Text></View></View>
+            <Pressable accessibilityRole="switch" accessibilityLabel="Activar o pausar recordatorios por WhatsApp" accessibilityState={{ checked: remindersEnabled, disabled: savingReminderPreference }} disabled={savingReminderPreference} onPress={() => void toggleWhatsAppReminders()} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchActive, savingReminderPreference && styles.disabled]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobActive]} /></Pressable>
+          </View>
           {businesses.length > 1 && <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.businessList}>{businesses.map((item) => <Pressable key={item.id} onPress={() => { setServices([]); setLoadedBusinessId(""); setBusinessId(item.id); }} style={[styles.businessChip, businessId === item.id && styles.businessChipActive]}><Text style={[styles.businessChipText, businessId === item.id && styles.businessChipTextActive]}>{item.nombre}</Text></Pressable>)}</ScrollView>}
           <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar servicio" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
           {appointmentsError ? <View style={styles.appointmentRetry}><Text accessibilityRole="alert" style={styles.retryMessage}>No pudimos cargar tus citas, intenta de nuevo</Text><Pressable accessibilityRole="button" onPress={() => { setAppointmentsError(false); setAppointmentsRetry((value) => value + 1); }}><Text style={styles.retryAction}>Intentar de nuevo</Text></Pressable></View> : null}
@@ -208,6 +235,7 @@ function availabilityMessage(reason: unknown) { console.warn("No se pudo consult
 
 const styles = StyleSheet.create({
   content: { paddingBottom: 34 }, heading: { paddingHorizontal: 20, marginTop: 8 }, eyebrow: { color: BRAND.primary, fontSize: 10, letterSpacing: 1.2, fontWeight: "800" }, title: { color: BRAND.wine, fontSize: 27, lineHeight: 34, fontWeight: "800", marginTop: 6 }, subtitle: { color: BRAND.muted, fontSize: 13, lineHeight: 19, marginTop: 6 }, businessList: { gap: 8, paddingHorizontal: 20, paddingTop: 16 }, businessChip: { borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border }, businessChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary }, businessChipText: { color: BRAND.wine, fontSize: 11, fontWeight: "700" }, businessChipTextActive: { color: "#FFFFFF" },
+  reminderConsent: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 10, backgroundColor: BRAND.surface, borderWidth: 1, borderColor: BRAND.border, borderRadius: 16, padding: 12, marginHorizontal: 20, marginTop: 14 }, reminderCopy: { flex: 1, flexDirection: "row", alignItems: "flex-start", gap: 8 }, reminderText: { flex: 1 }, reminderTitle: { color: BRAND.wine, fontSize: 11, fontWeight: "800" }, reminderHint: { color: BRAND.muted, fontSize: 10, lineHeight: 14, marginTop: 2 }, reminderSwitch: { width: 43, height: 25, borderRadius: 13, padding: 3, justifyContent: "center", backgroundColor: BRAND.border }, reminderSwitchActive: { backgroundColor: BRAND.primary }, reminderKnob: { width: 19, height: 19, borderRadius: 10, backgroundColor: "#FFFFFF", alignSelf: "flex-start" }, reminderKnobActive: { alignSelf: "flex-end" },
   search: { flexDirection: "row", alignItems: "center", gap: 8, marginHorizontal: 20, marginTop: 14, backgroundColor: BRAND.surface, borderRadius: 15, height: 45, paddingHorizontal: 13, borderWidth: 1, borderColor: BRAND.border }, input: { flex: 1, color: BRAND.wine, fontSize: 13 }, notice: { marginHorizontal: 20, marginTop: 9, color: BRAND.primaryDark, backgroundColor: BRAND.softPink, fontSize: 11, lineHeight: 16, padding: 10, borderRadius: 12 }, error: { marginHorizontal: 20, marginTop: 9, color: BRAND.error, fontSize: 11, lineHeight: 16 }, appointmentRetry: { marginHorizontal: 20, marginTop: 9, padding: 12, borderRadius: 14, backgroundColor: BRAND.softPink, gap: 6 }, retryMessage: { color: BRAND.error, fontSize: 12, lineHeight: 17 }, retryAction: { color: BRAND.primaryDark, fontSize: 12, fontWeight: "800" }, state: { alignItems: "center", gap: 8, padding: 25 }, stateText: { color: BRAND.muted, fontSize: 12 },
   serviceCard: { flexDirection: "row", alignItems: "center", gap: 10, backgroundColor: BRAND.surface, borderRadius: 19, padding: 13, marginHorizontal: 20, marginTop: 9, borderWidth: 1, borderColor: BRAND.border }, serviceIcon: { width: 37, height: 37, borderRadius: 13, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, serviceBody: { flex: 1 }, serviceName: { color: BRAND.wine, fontSize: 13, fontWeight: "800" }, description: { color: BRAND.muted, fontSize: 10, lineHeight: 14, marginTop: 3 }, serviceMeta: { flexDirection: "row", gap: 9, alignItems: "center", marginTop: 6 }, price: { color: BRAND.primaryDark, fontSize: 11, fontWeight: "800" }, duration: { color: BRAND.muted, fontSize: 10, flexDirection: "row", alignItems: "center" }, selectButton: { borderRadius: 999, paddingHorizontal: 11, paddingVertical: 9, backgroundColor: BRAND.primary }, selectText: { color: "#FFFFFF", fontSize: 10, fontWeight: "800" }, disabled: { opacity: .5 }, section: { flexDirection: "row", justifyContent: "space-between", alignItems: "baseline", paddingHorizontal: 20, marginTop: 24, marginBottom: 8 }, sectionTitle: { color: BRAND.wine, fontSize: 16, fontWeight: "800" }, sectionHint: { color: BRAND.muted, fontSize: 10 }, empty: { alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 22, marginHorizontal: 20, marginTop: 8, padding: 21, borderWidth: 1, borderColor: BRAND.border }, emptyTitle: { color: BRAND.wine, fontSize: 14, fontWeight: "800", marginTop: 9, textAlign: "center" }, emptyText: { color: BRAND.muted, fontSize: 12, lineHeight: 17, textAlign: "center", marginTop: 4 },
   clientAppointment: { backgroundColor: BRAND.surface, borderRadius: 17, borderWidth: 1, borderColor: BRAND.border, padding: 13, marginHorizontal: 20, marginBottom: 8 }, appointmentTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 }, clientService: { color: BRAND.wine, fontSize: 12, fontWeight: "800", flex: 1 }, status: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, fontSize: 9, fontWeight: "800", textTransform: "capitalize", borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4, overflow: "hidden" }, appointmentInfo: { color: BRAND.muted, fontSize: 10, marginTop: 5 },
