@@ -75,6 +75,8 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
 5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.
 
+Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el archivo `empleados/{uid}` se crea solo al completar la solicitud.
+
 ## Firestore: datos del negocio
 
 No hay precios, servicios, empleados ni horarios de muestra. Antes de aceptar citas, configura datos reales:
@@ -151,6 +153,9 @@ firebase deploy --project euforia-e76a6 --only firestore:indexes
 
 # 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
 firebase deploy --project euforia-e76a6 --only functions
+
+# Si únicamente falta habilitar el envío de solicitudes de empleado
+firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado
 ```
 
 Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.

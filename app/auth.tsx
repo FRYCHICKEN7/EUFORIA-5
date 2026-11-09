@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { KeyboardAvoidingView, Modal, Platform, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { Image } from "expo-image";
 import { router } from "expo-router";
-import { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut } from "firebase/auth";
+import { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, type UserCredential } from "firebase/auth";
 import { doc, serverTimestamp, writeBatch } from "firebase/firestore";
 import { ArrowLeft, ArrowRight, Eye, EyeOff, Fingerprint, LockKeyhole, Mail, Phone, Settings, UserRound } from "lucide-react-native";
 import { BRAND } from "@/constants/brand";
@@ -27,6 +27,17 @@ function getAuthErrorMessage(error: unknown) {
   if (code.includes("permission-denied")) return "No pudimos guardar tus datos. Intenta de nuevo.";
   if (code.includes("network-request-failed")) return "No hay conexión. Comprueba tu internet e inténtalo de nuevo.";
   return "No se pudo completar la operación. Intenta de nuevo.";
+}
+
+function getEmployeeRequestErrorMessage(error: unknown) {
+  const code = (error as { code?: string })?.code ?? "";
+  if (code.includes("functions/not-found") || code.includes("functions/unavailable") || code.includes("functions/deadline-exceeded")) {
+    return "Tu cuenta ya está creada, pero la solicitud no se envió. No vuelvas a registrarte. Pide a administración que actualice el sistema del salón y luego inicia sesión con este mismo correo como empleado.";
+  }
+  if (code.includes("functions/permission-denied") || code.includes("functions/failed-precondition")) {
+    return "Tu cuenta ya está creada, pero la solicitud no se envió. Pide a administración que revise el acceso al equipo. Cuando esté corregido, inicia sesión con este mismo correo como empleado; no vuelvas a registrarte.";
+  }
+  return "Tu cuenta ya está creada, pero la solicitud no se envió. Inicia sesión con este mismo correo como empleado para volver a intentarlo; no vuelvas a registrarte.";
 }
 
 export default function AuthScreen() {
@@ -101,37 +112,72 @@ export default function AuthScreen() {
 
       if (mode === "register") suppressAuthRedirect.current = true;
       else suppressAuthRedirect.current = false;
-      const credential = mode === "register"
-        ? await createUserWithEmailAndPassword(auth, normalizedEmail, password)
-        : await signInWithEmailAndPassword(auth, normalizedEmail, password);
+      let credential: UserCredential;
+      let recoveredExistingEmployeeAccount = false;
+      if (mode === "register") {
+        try {
+          credential = await createUserWithEmailAndPassword(auth, normalizedEmail, password);
+        } catch (error) {
+          const code = (error as { code?: string })?.code ?? "";
+          if (role !== "empleado" || !code.includes("email-already-in-use")) throw error;
+          credential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+          recoveredExistingEmployeeAccount = true;
+        }
+      } else {
+        credential = await signInWithEmailAndPassword(auth, normalizedEmail, password);
+      }
       let profile = await loadUserProfile(credential.user.uid);
 
       if (mode === "register") {
-        const profileData = {
-          id: credential.user.uid,
-          email: credential.user.email ?? normalizedEmail,
-          name: name.trim(),
-          displayName: name.trim(),
-          profileImage: "",
-          role: "cliente",
-          rol: "cliente",
-          createdAt: serverTimestamp(),
-          phone: normalizedPhone!,
-          aceptaRecordatoriosWhatsApp: true,
-          ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
-        };
-        const batch = writeBatch(store);
-        batch.set(doc(store, "users", credential.user.uid), profileData);
-        batch.set(doc(store, "usuarios", credential.user.uid), profileData);
-        await batch.commit();
-        profile = await loadUserProfile(credential.user.uid);
-        if (role === "empleado") await solicitarPerfilEmpleado();
+        if (recoveredExistingEmployeeAccount && profile && profileRole(profile) !== "cliente") {
+          await signOut(auth);
+          setMode("login");
+          setStaffAccessVisible(true);
+          setRole("empleado");
+          setMessage(profileRole(profile) === "empleado"
+            ? "Esta cuenta ya tiene acceso de empleado. Inicia sesión desde el acceso del equipo."
+            : "Este correo ya tiene una cuenta con otro tipo de acceso. Inicia sesión con el acceso correspondiente.");
+          return;
+        }
+        if (!profile) {
+          const profileData = {
+            id: credential.user.uid,
+            email: credential.user.email ?? normalizedEmail,
+            name: name.trim(),
+            displayName: name.trim(),
+            profileImage: "",
+            role: "cliente",
+            rol: "cliente",
+            createdAt: serverTimestamp(),
+            phone: normalizedPhone!,
+            aceptaRecordatoriosWhatsApp: true,
+            ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
+          };
+          const batch = writeBatch(store);
+          batch.set(doc(store, "users", credential.user.uid), profileData);
+          batch.set(doc(store, "usuarios", credential.user.uid), profileData);
+          await batch.commit();
+          profile = await loadUserProfile(credential.user.uid);
+        }
+        if (role === "empleado") {
+          try {
+            await solicitarPerfilEmpleado();
+          } catch (requestError) {
+            console.warn("No se pudo completar el envío de la solicitud de empleado.", (requestError as { code?: string })?.code);
+            await signOut(auth);
+            setMode("login");
+            setStaffAccessVisible(true);
+            setRole("empleado");
+            setMessage(getEmployeeRequestErrorMessage(requestError));
+            return;
+          }
+        }
         await signOut(auth);
         setMode("login");
-        setRole("cliente");
-        setStaffAccessVisible(false);
+        setRole(role === "empleado" ? "empleado" : "cliente");
+        setStaffAccessVisible(role === "empleado");
         setMessage(role === "empleado"
-          ? "Tu cuenta está lista y la solicitud para unirte al equipo quedó pendiente de revisión. Hasta que la acepten, podrás usarla como cliente."
+          ? "Tu cuenta está lista y la solicitud para unirte al equipo quedó pendiente de revisión. Administración la revisará antes de activar tu acceso."
           : "Tu cuenta de cliente está lista. Ya puedes iniciar sesión.");
         return;
       }
@@ -159,7 +205,7 @@ export default function AuthScreen() {
           } catch (reason) {
             console.warn("No se pudo enviar la solicitud de empleado.", reason);
             await signOut(auth);
-            setMessage("No pudimos enviar la solicitud. Intenta de nuevo cuando tengas conexión.");
+            setMessage(getEmployeeRequestErrorMessage(reason));
           }
           return;
         }
@@ -263,7 +309,7 @@ export default function AuthScreen() {
         {mode === "login" && <Pressable onPress={() => { setMode("recovery"); setMessage(""); }} style={styles.forgot}><Text style={styles.linkText}>¿Olvidaste tu contraseña?</Text></Pressable>}
         {mode === "recovery" && <Pressable onPress={() => { setMode("login"); setMessage(""); }} style={styles.back}><ArrowLeft size={15} color={BRAND.primaryDark} /><Text style={styles.backText}>Volver a iniciar sesión</Text></Pressable>}
         {mode !== "recovery" && (
-          <Pressable onPress={() => { setMode((value) => value === "login" ? "register" : "login"); setRole("cliente"); setStaffAccessVisible(false); setMessage(""); }} style={styles.switch}>
+          <Pressable onPress={() => { const goingToLogin = mode === "register"; setMode(goingToLogin ? "login" : "register"); setRole(goingToLogin && role === "empleado" ? "empleado" : "cliente"); setStaffAccessVisible(goingToLogin && role === "empleado"); setMessage(""); }} style={styles.switch}>
             <Text style={styles.switchText}>{mode === "login" ? "¿No tienes cuenta? " : "¿Ya tienes cuenta? "}<Text style={styles.switchAccent}>{mode === "login" ? "Regístrate" : "Inicia sesión"}</Text></Text>
           </Pressable>
         )}
