@@ -70,7 +70,7 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 ### Solicitud y aprobación de empleado
 
 1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos de la cuenta. Se crea primero un perfil cliente y se envía una solicitud; el perfil no obtiene acceso al área del equipo mientras esté pendiente.
-2. **Clientes y equipo** muestra solicitudes pendientes. Administración solo puede **Aceptar** o **Rechazar**; ya no registra empleados ni asigna códigos manualmente.
+2. **Clientes y equipo** ofrece las pestañas **Clientes** y **Empleados**. En **Empleados** se muestran por separado las solicitudes pendientes y los empleados aceptados. Administración solo puede **Aceptar** o **Rechazar** solicitudes; ya no registra empleados ni asigna códigos manualmente.
 3. Las funciones verifican el rol administrativo y la solicitud. Si se acepta, se asigna el único negocio activo; si no existe, se crea **EUFORIA Beauty Studio** activo. Si hay varios negocios activos, la aceptación se detiene para evitar asignar al negocio equivocado. El rol empleado y la membresía del negocio se guardan únicamente después de aceptar.
 4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
 5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.

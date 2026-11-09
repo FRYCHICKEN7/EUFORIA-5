@@ -30,6 +30,9 @@ function ClientsContent() {
   const [notice, setNotice] = useState("");
   const [now, setNow] = useState(0);
   const [requestBusy, setRequestBusy] = useState<string | null>(null);
+  const [activeList, setActiveList] = useState<"clientes" | "empleados">("clientes");
+  const [requestsLoaded, setRequestsLoaded] = useState(false);
+  const [employeesLoaded, setEmployeesLoaded] = useState(false);
 
   useEffect(() => {
     const firstTick = setTimeout(() => setNow(Date.now()), 0);
@@ -56,13 +59,13 @@ function ClientsContent() {
           setError("No pudimos cargar los clientes. Intenta de nuevo.");
           setLoading(false);
         });
-        stopRequests = subscribePendingEmployeeRequests((rows) => { if (active) setRequests(rows); }, (reason) => {
+        stopRequests = subscribePendingEmployeeRequests((rows) => { if (active) { setRequests(rows); setRequestsLoaded(true); } }, (reason) => {
           console.warn("No se pudieron cargar las solicitudes del equipo.", reason);
-          if (active) setError("No pudimos cargar las solicitudes del equipo. Intenta de nuevo.");
+          if (active) { setError("No pudimos cargar las solicitudes del equipo. Intenta de nuevo."); setRequestsLoaded(true); }
         });
-        stopEmployees = subscribeAdminEmployees((rows) => { if (active) setEmployees(rows); }, (reason) => {
+        stopEmployees = subscribeAdminEmployees((rows) => { if (active) { setEmployees(rows); setEmployeesLoaded(true); } }, (reason) => {
           console.warn("No se pudo cargar la lista del equipo.", reason);
-          if (active) setError("No pudimos cargar el equipo. Intenta de nuevo.");
+          if (active) { setError("No pudimos cargar el equipo. Intenta de nuevo."); setEmployeesLoaded(true); }
         });
         void loadBusinesses().then((rows) => {
           if (!active) return;
@@ -127,17 +130,28 @@ function ClientsContent() {
             <Metric label="Nuevos · 30 días" value={loading ? "…" : String(newClients)} />
             <Metric label="Empleados" value={String(employees.length)} />
           </View>
+          <View style={styles.listTabs} accessibilityRole="tablist">
+            <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeList === "clientes" }} onPress={() => setActiveList("clientes")} style={[styles.listTab, activeList === "clientes" && styles.listTabActive]}>
+              <Text style={[styles.listTabText, activeList === "clientes" && styles.listTabTextActive]}>Clientes</Text>
+            </Pressable>
+            <Pressable accessibilityRole="tab" accessibilityState={{ selected: activeList === "empleados" }} onPress={() => setActiveList("empleados")} style={[styles.listTab, activeList === "empleados" && styles.listTabActive]}>
+              <Text style={[styles.listTabText, activeList === "empleados" && styles.listTabTextActive]}>Empleados</Text>
+              {requests.length > 0 && <View style={[styles.requestBadge, activeList === "empleados" && styles.requestBadgeActive]}><Text style={[styles.requestBadgeText, activeList === "empleados" && styles.requestBadgeTextActive]}>{requests.length}</Text></View>}
+            </Pressable>
+          </View>
           {notice ? <Text accessibilityRole="alert" style={styles.notice}>{notice}</Text> : null}
           {error ? <Text accessibilityRole="alert" style={[styles.error, isDark && { color: BRAND.onDarkErrorText }]}>{error}</Text> : null}
 
-          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Equipo autorizado</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Revisa las solicitudes de acceso al equipo.</Text></View>
-          {requests.length > 0 && <View style={styles.requestList}>{requests.map((request) => <PendingRequestCard key={request.id} item={request} busy={requestBusy === request.id} onApprove={() => void reviewRequest(request, "approve")} onReject={() => void reviewRequest(request, "reject")} />)}</View>}
-          {requests.length === 0 && <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>No hay solicitudes pendientes.</Text></View>}
-          {employees.length === 0 ? <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>El equipo aparecerá aquí cuando administración acepte una solicitud.</Text></View> : employees.map((employee) => <EmployeeCard key={employee.id} item={employee} businessName={businesses.find((business) => business.id === employee.negocioId)?.nombre} />)}
-
-          <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Perfiles de las personas que usan EUFORIA.</Text></View>
-          <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo o teléfono" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
-          {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando perfiles…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{customerProfiles.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{customerProfiles.length === 0 ? "Aquí aparecerán las personas que se registren como clientes." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onWhatsApp={() => void openWhatsApp(client)} />)}
+          {activeList === "empleados" ? <>
+            <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Solicitudes de empleado</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Quienes se registren desde el acceso de empleado aparecerán aquí para revisión.</Text></View>
+            {!requestsLoaded && !error ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando solicitudes…</Text></View> : requests.length > 0 ? <View style={styles.requestList}>{requests.map((request) => <PendingRequestCard key={request.id} item={request} busy={requestBusy === request.id} onApprove={() => void reviewRequest(request, "approve")} onReject={() => void reviewRequest(request, "reject")} />)}</View> : !error ? <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>No hay solicitudes pendientes. La persona debe elegir «Empleado» y registrarse desde el acceso del equipo.</Text></View> : null}
+            <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Empleados aceptados</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Solo aparecen aquí después de que administración acepte su solicitud.</Text></View>
+            {!employeesLoaded && !error ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando empleados…</Text></View> : employees.length === 0 ? !error && <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>Aún no hay empleados aceptados.</Text></View> : employees.map((employee) => <EmployeeCard key={employee.id} item={employee} businessName={businesses.find((business) => business.id === employee.negocioId)?.nombre} />)}
+          </> : <>
+            <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Perfiles de las personas que usan EUFORIA.</Text></View>
+            <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo o teléfono" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
+            {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando perfiles…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{customerProfiles.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{customerProfiles.length === 0 ? "Aquí aparecerán las personas que se registren como clientes." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onWhatsApp={() => void openWhatsApp(client)} />)}
+          </>}
         </ScrollView>
       </ScreenContainer>
     </AuthGate>
@@ -192,6 +206,15 @@ const styles = StyleSheet.create({
   title: { color: BRAND.wine, fontSize: 28, fontWeight: "800", marginTop: 5 },
   metrics: { flexDirection: "row", gap: 8, paddingHorizontal: 20, marginTop: 16 },
   metric: { flex: 1, backgroundColor: BRAND.surface, borderRadius: 17, padding: 12, borderWidth: 1, borderColor: BRAND.border },
+  listTabs: { flexDirection: "row", gap: 8, marginHorizontal: 20, marginTop: 14, padding: 4, borderRadius: 16, borderWidth: 1, borderColor: BRAND.border, backgroundColor: BRAND.surface },
+  listTab: { flex: 1, minHeight: 42, borderRadius: 12, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7 },
+  listTabActive: { backgroundColor: BRAND.primary },
+  listTabText: { color: BRAND.wine, fontSize: 13, fontWeight: "800" },
+  listTabTextActive: { color: "#FFFFFF" },
+  requestBadge: { minWidth: 19, height: 19, borderRadius: 10, alignItems: "center", justifyContent: "center", paddingHorizontal: 5, backgroundColor: BRAND.softPink },
+  requestBadgeActive: { backgroundColor: "#FFFFFF" },
+  requestBadgeText: { color: BRAND.wine, fontSize: 10, fontWeight: "900" },
+  requestBadgeTextActive: { color: BRAND.primaryDark },
   metricLabel: { color: BRAND.muted, fontSize: 10, fontWeight: "700" }, metricValue: { color: BRAND.wine, fontSize: 22, fontWeight: "800", marginTop: 3 },
   notice: { color: BRAND.primaryDark, backgroundColor: BRAND.softPink, fontSize: 12, lineHeight: 18, padding: 12, borderRadius: 15, marginHorizontal: 20, marginTop: 12 },
   error: { color: BRAND.error, fontSize: 12, lineHeight: 18, marginHorizontal: 20, marginTop: 12 },
