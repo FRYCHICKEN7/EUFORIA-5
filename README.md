@@ -4,7 +4,7 @@ Aplicación móvil Expo Router / React Native / TypeScript para clientes, emplea
 
 ## Estado y límites de esta entrega
 
-El código implementa login y registro de clientes, perfiles compatibles con `users` y `usuarios`, solicitudes de ingreso de empleados con decisión administrativa **Aceptar/Rechazar**, catálogo de servicios con duración y periodos de regreso, turnos semanales, disponibilidad segura, reservas sin solapamientos, medición de servicios, recordatorios de WhatsApp preparados manualmente y copias locales para el teléfono.
+El código implementa inicio y registro de clientes, perfiles compatibles con `users` y `usuarios`, solicitudes de ingreso de empleados con decisión administrativa **Aceptar/Rechazar**, separación de aspirantes y clientes, creación administrativa de cuentas cliente con contraseña provisional y cambio obligatorio en el primer acceso, catálogo de servicios con duración y periodos de regreso, turnos semanales, disponibilidad segura, reservas sin solapamientos, medición de servicios, recordatorios de WhatsApp preparados manualmente y copias locales para el teléfono.
 
 En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino usan texto blanco; las tarjetas claras conservan su tipografía oscura. Las instrucciones de Firebase de esta guía son manuales: esta entrega no ejecuta despliegues.
 
@@ -18,7 +18,7 @@ Authentication Email/Password debe estar habilitado. Al registrarse, cada person
 
 Los perfiles históricos podrían conservar un valor guardado antes de retirar el dato de identidad; el código ya no lo solicita ni lo presenta y las reglas rechazan que se vuelva a agregar al editar el perfil. No se borraron datos reales; una limpieza retroactiva requiere respaldo y migración manual.
 
-Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles antiguos con `role: "customer"` o `role: "client"` se interpretan como cliente; `role`/`rol` deben coincidir si ambos aparecen. Cuando existen fuentes con roles contradictorios, el acceso se deniega hasta reconciliarlas. El panel **Clientes** une los perfiles `users/{uid}` y `usuarios/{uid}` por su ID interno, muestra correo, nombre, teléfono y cumpleaños cuando existen, y mantiene ocultos los identificadores técnicos. No muestra el campo de identidad.
+Para compatibilidad, la sesión lee los documentos propios `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles antiguos con `role: "customer"` o `role: "client"` se interpretan como cliente; `role`/`rol` deben coincidir si ambos aparecen. Cuando existen fuentes con roles contradictorios, el acceso se deniega hasta reconciliarlas. El panel **Clientes** une los perfiles `users/{uid}` y `usuarios/{uid}` por su ID interno, muestra correo, nombre, teléfono y cumpleaños cuando existen, mantiene ocultos los identificadores técnicos y excluye a cualquier persona que tenga un documento en `empleados/{uid}`, sin importar si su solicitud está pendiente, rechazada o aprobada. No muestra el campo de identidad.
 
 ### Preparar una cuenta administradora
 
@@ -75,7 +75,11 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
 5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.
 
-Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el archivo `empleados/{uid}` se crea solo al completar la solicitud.
+Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el archivo `empleados/{uid}` se crea solo al completar la solicitud. Las solicitudes rechazadas permanecen en `empleados/{uid}` para que esa persona no aparezca como cliente.
+
+### Crear cuentas de clientes con contraseña provisional
+
+Desde **Clientes y equipo → Clientes → Crear cliente**, administración ingresa nombre, correo, teléfono hondureño o internacional, cumpleaños opcional y una contraseña provisional de al menos 8 caracteres. El servidor crea la cuenta y los perfiles `users/{uid}` y `usuarios/{uid}` con el mismo UID y rol cliente. La contraseña solo se usa para crear la cuenta de acceso: no se guarda en Firestore, en las copias ni en registros. Se muestra a administración solo mientras el formulario sigue abierto para poder entregarla de forma privada. Al entrar por primera vez, el cliente debe escribir la contraseña actual, elegir otra y confirmarla; hasta completar el cambio, todas las pantallas de cliente lo devuelven a esa acción. Si la contraseña se actualizó pero la conexión se interrumpió antes de terminar, el cliente puede volver a intentar usando como actual la última que eligió. Después puede cambiar su contraseña desde el botón **Cambiar contraseña** del catálogo. El campo `mustChangePassword` solo lo administra el servidor y las reglas actuales impiden que el cliente lo cambie directamente.
 
 ## Firestore: datos del negocio
 
@@ -154,11 +158,11 @@ firebase deploy --project euforia-e76a6 --only firestore:indexes
 # 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
 firebase deploy --project euforia-e76a6 --only functions
 
-# Si únicamente falta habilitar el envío de solicitudes de empleado
-firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado
+# Si se necesita actualizar solo el flujo de solicitudes y las nuevas funciones de clientes
+firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado,functions:crearCuentaCliente,functions:cambiarContrasenaProvisional
 ```
 
-Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.
+Esta mejora no añade índices ni requiere cambiar Rules: las reglas existentes ya permiten que administración lea `empleados` y bloquean al cliente cambiar los campos que solo escribe el servidor. Para corregir el registro fallido anterior y habilitar las cuentas provisionales, despliega las tres funciones indicadas o todas las Functions. Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.
 
 ## Desarrollo y verificaciones
 
@@ -175,7 +179,7 @@ pnpm install
 pnpm run build
 ```
 
-Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 47 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni prueban guardado local, WhatsApp o avisos nativos en un teléfono. Firestore Emulator arrancó bajo el proyecto de demostración `demo-euforia`, sin conectar con producción. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
+Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 49 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni prueban guardado local, WhatsApp o avisos nativos en un teléfono. Firestore Emulator arrancó bajo el proyecto de demostración `demo-euforia`, sin conectar con producción. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
 
 ## Pendientes fuera de esta fase
 

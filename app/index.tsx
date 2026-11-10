@@ -15,6 +15,7 @@ export default function EntryScreen() {
   const role = profileRole(profile);
   if (role === "admin") return <Redirect href="/(tabs)" />;
   if (role === "empleado") return <Redirect href="/employee/schedule" />;
+  if (role === "cliente" && profile.mustChangePassword === true) return <Redirect href="/change-password" />;
   if (role === "cliente") return <Redirect href="/client/catalog" />;
   return <Redirect href="/auth" />;
 }

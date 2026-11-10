@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Linking, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { Image } from "expo-image";
-import { Check, MessageCircle, Search, UsersRound, X } from "lucide-react-native";
+import { Check, MessageCircle, Search, UserPlus, UsersRound, X } from "lucide-react-native";
 import { AppHeader } from "@/components/app-header";
+import { AdminClientCreateModal } from "@/components/admin-client-create-modal";
 import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
@@ -33,6 +34,7 @@ function ClientsContent() {
   const [activeList, setActiveList] = useState<"clientes" | "empleados">("clientes");
   const [requestsLoaded, setRequestsLoaded] = useState(false);
   const [employeesLoaded, setEmployeesLoaded] = useState(false);
+  const [createClientVisible, setCreateClientVisible] = useState(false);
 
   useEffect(() => {
     const firstTick = setTimeout(() => setNow(Date.now()), 0);
@@ -149,10 +151,20 @@ function ClientsContent() {
             {!employeesLoaded && !error ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando empleados…</Text></View> : employees.length === 0 ? !error && <View style={styles.inlineEmpty}><UsersRound size={18} color={BRAND.primary} /><Text style={styles.inlineEmptyText}>Aún no hay empleados aceptados.</Text></View> : employees.map((employee) => <EmployeeCard key={employee.id} item={employee} businessName={businesses.find((business) => business.id === employee.negocioId)?.nombre} />)}
           </> : <>
             <View style={styles.sectionHeader}><Text style={[styles.sectionTitle, isDark && { color: BRAND.onDarkText }]}>Perfiles cliente</Text><Text style={[styles.sectionCaption, isDark && { color: BRAND.onDarkMutedText }]}>Perfiles de las personas que usan EUFORIA.</Text></View>
+            <Pressable accessibilityRole="button" onPress={() => setCreateClientVisible(true)} style={styles.createClientButton}><UserPlus size={17} color="#FFFFFF" /><Text style={styles.createClientText}>Crear cliente</Text></Pressable>
             <View style={styles.search}><Search size={18} color={BRAND.muted} /><TextInput value={search} onChangeText={setSearch} placeholder="Buscar nombre, correo o teléfono" placeholderTextColor={BRAND.muted} style={styles.input} /></View>
             {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={[styles.hint, isDark && { color: BRAND.onDarkMutedText }]}>Cargando perfiles…</Text></View> : error ? null : filtered.length === 0 ? <View style={styles.empty}><UsersRound size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>{customerProfiles.length === 0 ? "Aún no hay perfiles cliente" : "No encontramos coincidencias"}</Text><Text style={styles.hint}>{customerProfiles.length === 0 ? "Aquí aparecerán las personas que se registren como clientes." : "Prueba otra búsqueda."}</Text></View> : filtered.map((client) => <ClientCard key={client.id} item={client} onWhatsApp={() => void openWhatsApp(client)} />)}
           </>}
         </ScrollView>
+        <AdminClientCreateModal
+          visible={createClientVisible}
+          onClose={() => setCreateClientVisible(false)}
+          onCreated={(email) => {
+            setActiveList("clientes");
+            setSearch("");
+            setNotice(`Creamos el perfil para ${email}. La contraseña provisional está visible mientras esta ventana siga abierta.`);
+          }}
+        />
       </ScreenContainer>
     </AuthGate>
   );
@@ -226,5 +238,7 @@ const styles = StyleSheet.create({
   card: { flexDirection: "row", alignItems: "flex-start", gap: 11, backgroundColor: BRAND.surface, borderRadius: 18, padding: 13, marginHorizontal: 20, marginBottom: 8, borderWidth: 1, borderColor: BRAND.border }, photo: { width: 46, height: 46, borderRadius: 23, backgroundColor: BRAND.softPink }, avatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, avatarSmall: { width: 36, height: 36, borderRadius: 18, backgroundColor: BRAND.softPink, alignItems: "center", justifyContent: "center" }, initial: { color: BRAND.primaryDark, fontSize: 15, fontWeight: "800" }, copy: { flex: 1 }, name: { color: BRAND.wine, fontSize: 13, fontWeight: "800" }, details: { color: BRAND.muted, fontSize: 10, lineHeight: 15, marginTop: 2 }, cardActions: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 7 }, whatsappButton: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: 6, marginTop: 7, paddingHorizontal: 10, paddingVertical: 7, borderRadius: 999, backgroundColor: "#EAF6EF" }, whatsappText: { color: "#187A4E", fontSize: 10, fontWeight: "800" },
   requestList: { gap: 8 }, requestCard: { flexDirection: "row", backgroundColor: BRAND.surface, borderRadius: 18, padding: 14, marginHorizontal: 20, marginBottom: 8, borderWidth: 1, borderColor: BRAND.border }, pendingLabel: { color: BRAND.primaryDark, fontSize: 11, fontWeight: "800", marginTop: 5 }, requestActions: { flexDirection: "row", gap: 9, marginTop: 10 }, acceptButton: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: BRAND.primaryDark, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 }, rejectButton: { flexDirection: "row", alignItems: "center", gap: 5, backgroundColor: BRAND.wine, borderRadius: 999, paddingHorizontal: 14, paddingVertical: 9 }, actionText: { color: "#FFFFFF", fontSize: 11, fontWeight: "800" },
   employeeCard: { flexDirection: "row", gap: 9, alignItems: "center", backgroundColor: BRAND.surface, borderRadius: 17, padding: 11, marginHorizontal: 20, marginBottom: 7, borderWidth: 1, borderColor: BRAND.border },
+  createClientButton: { minHeight: 45, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 7, backgroundColor: BRAND.primary, borderRadius: 999, marginHorizontal: 20, marginBottom: 12 },
+  createClientText: { color: "#FFFFFF", fontSize: 13, fontWeight: "800" },
   disabled: { opacity: .55 },
 });

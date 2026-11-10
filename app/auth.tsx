@@ -65,10 +65,11 @@ export default function AuthScreen() {
   useEffect(() => {
     if (suppressAuthRedirect.current || isBiometricLocked) return;
     if (sessionLoading || !activeUser?.uid || !activeRole) return;
-    if (activeRole === "admin") router.replace("/(tabs)");
+    if (activeRole === "cliente" && activeProfile?.mustChangePassword === true) router.replace("/change-password");
+    else if (activeRole === "admin") router.replace("/(tabs)");
     else if (activeRole === "empleado") router.replace("/employee/schedule");
     else if (activeRole === "cliente") router.replace("/client/catalog");
-  }, [sessionLoading, activeUser?.uid, activeRole, isBiometricLocked]);
+  }, [sessionLoading, activeUser?.uid, activeRole, activeProfile?.mustChangePassword, isBiometricLocked]);
 
   const submit = async () => {
     setMessage("");
@@ -220,7 +221,9 @@ export default function AuthScreen() {
         return;
       }
       unlockSession();
-      const destination = selectedRoleForLogin === "administrador" ? "/(tabs)" : selectedRoleForLogin === "empleado" ? "/employee/schedule" : "/client/catalog";
+      const destination = storedRole === "cliente" && profile.mustChangePassword === true
+        ? "/change-password"
+        : selectedRoleForLogin === "administrador" ? "/(tabs)" : selectedRoleForLogin === "empleado" ? "/employee/schedule" : "/client/catalog";
       if (!(await isBiometricEnrolledFor(credential.user.uid)) && await isBiometricLoginAvailable()) {
         setPendingBiometric({ uid: credential.user.uid, destination });
         setBiometricOfferMessage("");

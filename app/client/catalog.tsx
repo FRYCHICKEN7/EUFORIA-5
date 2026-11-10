@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
-import { Bell, CalendarDays, Check, Clock3, RefreshCw, Search, ShoppingBag, UserRound, X } from "lucide-react-native";
+import { router } from "expo-router";
+import { Bell, CalendarDays, Check, ChevronRight, Clock3, LockKeyhole, RefreshCw, Search, ShoppingBag, UserRound, X } from "lucide-react-native";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
 import { BRAND } from "@/constants/brand";
@@ -180,6 +181,11 @@ function ClientCatalogContent() {
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
           <AppHeader name={String(profile?.name ?? profile?.displayName ?? profile?.nombre ?? user?.email?.split("@")[0] ?? "tu cuenta")} />
           <View style={styles.heading}><Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>SERVICIOS DE EUFORIA</Text><Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Elige tu próximo servicio</Text><Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Selecciona un servicio, un profesional y una hora libre.</Text></View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Cambiar contraseña" onPress={() => router.push("/change-password")} style={{ flexDirection: "row", alignItems: "center", gap: 10, minHeight: 58, marginHorizontal: 20, marginTop: 14, paddingHorizontal: 13, borderRadius: 16, backgroundColor: isDark ? BRAND.wine : BRAND.surface, borderWidth: 1, borderColor: isDark ? "#7D3A52" : BRAND.border }}>
+            <LockKeyhole size={18} color={BRAND.primary} />
+            <View style={{ flex: 1 }}><Text style={{ color: isDark ? BRAND.onDarkText : BRAND.wine, fontSize: 12, fontWeight: "800" }}>Cambiar contraseña</Text><Text style={{ color: isDark ? BRAND.onDarkMutedText : BRAND.muted, fontSize: 10, marginTop: 2 }}>Actualiza tu acceso cuando lo necesites.</Text></View>
+            <ChevronRight size={17} color={isDark ? BRAND.onDarkMutedText : BRAND.muted} />
+          </Pressable>
           <View style={styles.reminderConsent}>
             <View style={styles.reminderCopy}><Bell size={17} color={BRAND.primary} /><View style={styles.reminderText}><Text style={styles.reminderTitle}>Recordatorios por WhatsApp</Text><Text style={styles.reminderHint}>{remindersEnabled ? "Activados · puedes pausarlos cuando quieras." : "Pausados · no prepararemos nuevos avisos."}</Text></View></View>
             <Pressable accessibilityRole="switch" accessibilityLabel="Activar o pausar recordatorios por WhatsApp" accessibilityState={{ checked: remindersEnabled, disabled: savingReminderPreference }} disabled={savingReminderPreference} onPress={() => void toggleWhatsAppReminders()} style={[styles.reminderSwitch, remindersEnabled && styles.reminderSwitchActive, savingReminderPreference && styles.disabled]}><View style={[styles.reminderKnob, remindersEnabled && styles.reminderKnobActive]} /></Pressable>

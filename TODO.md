@@ -27,25 +27,29 @@
 - [x] **Respaldo guardado en el celular:** administración exporta perfiles, negocio, servicios, horarios, equipo, clientes, citas y avisos. Se excluyen identidad, contraseñas, tokens y secretos. En Android se elige una carpeta del teléfono; en iPhone se abre la hoja del sistema para Guardar en Archivos. La copia no se sube a la nube y cancelar la selección no se presenta como un guardado exitoso.
 - [x] **Avisos al reservar:** al enviar una solicitud se crean avisos dentro de la app para el cliente, el empleado asignado y todos los administradores válidos. El aviso del cliente incluye servicio, profesional y fecha/hora. El flujo de push remoto se conserva; la llegada con la app cerrada requiere credenciales Expo/FCM/APNs y una prueba en dispositivos.
 - [x] **Compatibilidad de teléfonos históricos:** las funciones aceptan el teléfono guardado como `phone` o como `telefono`; los números no válidos se excluyen de WhatsApp.
-- [x] **README/TODO y despliegue manual:** se documentan los campos, la colección, los comandos de Rules/índices/Functions y las limitaciones probadas. No se ejecutó ningún despliegue a Firebase. El ZIP actualizado se entrega aparte.
+- [x] **README/TODO y despliegue manual:** se documentan los campos, la colección, los comandos de Rules/índices/Functions y las limitaciones probadas. No se ejecutó ningún despliegue a Firebase.
+- [x] **Solicitudes de personal fuera de Clientes:** cuando una persona elige registrarse como empleado, la aplicación debe crear o recuperar su cuenta de acceso y enviar una solicitud autenticada que escriba `empleados/{uid}`. Debe aparecer en **Empleados** como solicitud pendiente y nunca en **Clientes**, aunque la solicitud esté pendiente, sea rechazada o luego se apruebe. El rol de acceso se mantiene como cliente hasta la aprobación administrativa; rechazar no debe convertir ni mostrar a la persona como cliente. Si Authentication creó la cuenta pero falló el envío de la solicitud, volver a iniciar como empleado debe reutilizar la cuenta existente y reintentar sin duplicar cuentas ni sobrescribir datos. La colección se crea automáticamente al guardar el primer documento; no se crea manualmente desde la consola.
+- [x] **Alta administrativa de clientes con contraseña provisional:** solo administración puede crear desde la pestaña **Clientes** una cuenta de cliente con perfil real, correo, teléfono y contraseña provisional. La cuenta y los perfiles deben quedar asociados al mismo UID de acceso y rol cliente. La contraseña no debe guardarse en Firestore, respaldos ni registros. El usuario debe cambiarla antes de entrar a cualquier otra pantalla en su primer inicio de sesión y después debe poder cambiar su contraseña desde la cuenta.
+- [x] **Seguridad del cambio inicial:** solo el cliente autenticado al que se asignó una contraseña provisional puede completar el cambio inicial; proteger la acción contra llamadas anónimas o para cambiar la contraseña de otra cuenta. Después de completar, quitar la marca de cambio obligatorio en los perfiles y permitir navegar al catálogo. No desplegar Functions ni Rules en Firebase de producción desde esta tarea; documentar comandos exactos de despliegue.
 
 ## Verificaciones ejecutadas en esta versión
 
 - [x] `pnpm check`: TypeScript completo sin errores.
 - [x] `pnpm lint`: sin errores; aparece solo un aviso no bloqueante sobre configuración ESM de ESLint.
-- [x] `pnpm test`: 47 pruebas aprobadas, 1 prueba previa omitida.
+- [x] `pnpm test`: 49 pruebas aprobadas, 1 prueba previa omitida.
 - [x] `cd functions && pnpm run build`: compilación correcta. El entorno usa Node 22 aunque Functions declara Node 20; la compilación no se bloqueó.
 - [x] Firestore Rules arrancaron en el emulador local `demo-euforia`; no se conectó con Firebase producción.
-- [x] Expo exportó el bundle Android HBC y las 19 rutas Web. Esto no equivale a APK/EAS ni prueba almacenamiento local o push nativo en un teléfono.
+- [x] Expo exportó el bundle Android HBC y 19 rutas Web en la versión final. Esto no equivale a APK/EAS ni prueba almacenamiento local o push nativo en un teléfono.
 - [x] `firestore.indexes.json` es JSON válido y `git diff --check` no encontró errores de formato.
 - [x] Auditoría independiente detectó y se corrigieron: aviso inicial faltante al cliente, compatibilidad con `telefono` histórico y documentación del 29 de febrero; después se repitieron compilación, pruebas, exportaciones y verificación de Rules.
 - [x] En la corrección del registro parcial se repitieron `pnpm check`, `pnpm lint`, `pnpm test` (47 aprobadas, 1 omitida) y exportación del bundle Android. No se probó una cuenta real ni la llamada en Firebase.
 - [x] Tras hacer visible la pestaña **Empleados**, `pnpm check` y `pnpm lint` pasaron; `pnpm test` confirmó 47 pruebas aprobadas y 1 omitida. Esta revisión no probó una sesión administrativa conectada a datos reales.
+- [x] Para las nuevas cuentas cliente se repitieron `pnpm check`, `pnpm lint`, `pnpm test` (49 aprobadas, 1 omitida), `cd functions && pnpm run build` y exportaciones Android/Web. La prueba unitaria nueva cubre exclusión de solicitudes pendientes, rechazadas y aprobadas. Una auditoría independiente revisó el flujo de roles, contraseñas y navegación; no se probó una cuenta real.
 - [x] No se hicieron escrituras de prueba en Firebase producción ni se desplegaron Rules, índices o Functions.
 
 ## Pendiente para uso real
 
-- [ ] Desplegar manualmente Rules, índices y Functions después de revisarlas; no se ha desplegado ningún recurso desde esta tarea.
+- [ ] Desplegar manualmente Rules, índices y Functions después de revisarlas; para las cuentas con contraseña provisional se requieren las funciones `crearCuentaCliente` y `cambiarContrasenaProvisional`, y para el registro de empleados debe estar desplegada `solicitarPerfilEmpleado`. Esta mejora no requiere cambios nuevos de Rules ni índices. No se ha desplegado ningún recurso desde esta tarea.
 - [ ] Asociar proyecto Expo/EAS, configurar FCM/APNs, tokens y build nativo para recibir push con la app cerrada; verificarlo realmente.
-- [ ] Probar solicitud/aprobación/rechazo, recordatorios WhatsApp manuales y el guardado en una carpeta del teléfono después del despliegue. No afirmar resultados de producción antes de esa prueba.
+- [ ] Probar solicitud/aprobación/rechazo, alta de cliente y cambio obligatorio de contraseña, recordatorios WhatsApp manuales y el guardado en una carpeta del teléfono después del despliegue. No afirmar resultados de producción antes de esa prueba.
 - [ ] La restauración desde una copia, feriados, descansos múltiples y disponibilidad variable por fecha quedan fuera de esta entrega.

@@ -16,6 +16,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 import { db, ensureFirebaseConfigured, functions } from "@/lib/firebase";
 import { mergeProfileSources, profileRole, type ProfileRecord } from "@/lib/roles";
+import { filterAdminCustomerProfiles } from "./admin-client-filter";
 
 const PROFILE_COLLECTIONS = ["users", "empleados", "usuarios"] as const;
 
@@ -99,6 +100,8 @@ export function subscribeAdminClients(
 ): Unsubscribe {
   if (!db) throw new Error("El servicio no está disponible.");
   const snapshotsByQuery = new Map<number, Map<string, CustomerProfile>>();
+  let employeeApplicationIds = new Set<string>();
+  let employeeApplicationsLoaded = false;
   let failed = false;
   const queries = [
     query(collection(db, "users"), where("role", "in", CLIENT_ROLE_VALUES)),
@@ -107,17 +110,19 @@ export function subscribeAdminClients(
     query(collection(db, "usuarios"), where("rol", "in", CLIENT_ROLE_VALUES)),
   ];
   const publish = () => {
+    if (!employeeApplicationsLoaded || snapshotsByQuery.size < queries.length) return;
     const byUid = new Map<string, ProfileRecord[]>();
     snapshotsByQuery.forEach((rows) => rows.forEach((record, id) => {
       const group = byUid.get(id) ?? [];
       group.push(record);
       byUid.set(id, group);
     }));
-    const clients = [...byUid.entries()].flatMap(([id, sources]) => {
+    const profiles = [...byUid.entries()].flatMap(([id, sources]) => {
       const profile = mergeProfileSources(sources);
-      if (profileRole(profile) !== "cliente" || profile?.roleConflict) return [];
+      if (!profile) return [];
       return [{ ...profile, id } as CustomerProfile];
     });
+    const clients = filterAdminCustomerProfiles(profiles, employeeApplicationIds);
     next(clients.sort((a, b) => String(a.name ?? a.displayName ?? a.nombre ?? "").localeCompare(String(b.name ?? b.displayName ?? b.nombre ?? ""), "es")));
   };
   const subscriptions = queries.map((currentQuery, index) => onSnapshot(
@@ -137,7 +142,24 @@ export function subscribeAdminClients(
       }
     },
   ));
-  return () => subscriptions.forEach((unsubscribe) => unsubscribe());
+  const employeeApplicationsSubscription = onSnapshot(
+    collection(db, "empleados"),
+    (snapshot) => {
+      employeeApplicationIds = new Set(snapshot.docs.map((item) => item.id));
+      employeeApplicationsLoaded = true;
+      publish();
+    },
+    (reason) => {
+      if (!failed) {
+        failed = true;
+        error(reason);
+      }
+    },
+  );
+  return () => {
+    subscriptions.forEach((unsubscribe) => unsubscribe());
+    employeeApplicationsSubscription();
+  };
 }
 
 export type PendingEmployeeRequest = {
@@ -177,6 +199,27 @@ export async function rechazarSolicitudEmpleado(input: { uid: string }) {
   if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
   const callable = httpsCallable<typeof input, { ok: true }>(functions, "rechazarSolicitudEmpleado");
   return (await callable(input)).data;
+}
+
+export type CreateAdminClientInput = {
+  name: string;
+  email: string;
+  phone: string;
+  temporaryPassword: string;
+  birthdayDay?: number;
+  birthdayMonth?: number;
+};
+
+export async function createAdminClientAccount(input: CreateAdminClientInput) {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<CreateAdminClientInput, { ok: true; uid: string; email: string }>(functions, "crearCuentaCliente");
+  return (await callable(input)).data;
+}
+
+export async function completeProvisionalCustomerPasswordChange(newPassword: string) {
+  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
+  const callable = httpsCallable<{ newPassword: string }, { ok: true }>(functions, "cambiarContrasenaProvisional");
+  return (await callable({ newPassword })).data;
 }
 
 export type EmployeeProfile = {

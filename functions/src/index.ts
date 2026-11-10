@@ -16,6 +16,7 @@ export {
   sincronizarRecordatoriosCitas,
   sincronizarRecordatoriosServicios,
 } from "./reminders";
+export { cambiarContrasenaProvisional, crearCuentaCliente } from "./accounts";
 import {
   computeAvailableSlots,
   hondurasDayBounds,

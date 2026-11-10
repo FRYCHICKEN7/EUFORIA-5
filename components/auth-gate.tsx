@@ -3,7 +3,7 @@ import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { Redirect } from "expo-router";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
-import { hasProfileRole } from "@/lib/roles";
+import { hasProfileRole, profileRole } from "@/lib/roles";
 
 type AllowedRole = "cliente" | "empleado" | "administrador" | "admin";
 
@@ -14,6 +14,7 @@ export function AuthGate({ allowedRoles, children }: PropsWithChildren<{ allowed
   }
   if (!user || !profile) return <Redirect href="/auth" />;
   if (isBiometricLocked) return <Redirect href="/auth" />;
+  if (profileRole(profile) === "cliente" && profile.mustChangePassword === true) return <Redirect href="/change-password" />;
   if (!hasProfileRole(profile, allowedRoles)) return <Redirect href="/" />;
   return <>{children}</>;
 }
