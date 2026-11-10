@@ -160,8 +160,8 @@ firebase deploy --project euforia-e76a6 --only firestore:indexes
 # 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
 firebase deploy --project euforia-e76a6 --only functions
 
-# Para aplicar el guardado atómico de la solicitud de empleado
-firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado
+# Para activar el registro, la aprobación y el rechazo de empleados
+firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado,functions:aprobarSolicitudEmpleado,functions:rechazarSolicitudEmpleado
 
 # Si además falta publicar las funciones de cuentas provisionales
 firebase deploy --project euforia-e76a6 --only functions:crearCuentaCliente,functions:cambiarContrasenaProvisional

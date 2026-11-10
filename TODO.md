@@ -37,6 +37,8 @@
 - [x] **Registro de empleado atómico:** al elegir **Empleado** durante el registro, el servidor crea en una sola transacción `users/{uid}`, `usuarios/{uid}` como perfil de acceso cliente y `empleados/{uid}` con `estadoSolicitud: "pendiente"`. Los perfiles base conservan `role/rol: "cliente"` hasta que administración apruebe; el documento de solicitud queda separado y se muestra en la pestaña **Empleados**. Una interrupción no debe dejar un perfil nuevo solo en Clientes. Se mantienen recuperación e idempotencia para cuentas existentes.
 - [ ] Desplegar la versión actualizada de `solicitarPerfilEmpleado` y actualizar la app instalada; las versiones/funciones anteriores no ejecutan la nueva operación atómica.
 - [x] Para este cambio: `pnpm check`, `pnpm lint`, `pnpm test` (49 aprobadas, 1 omitida), `cd functions && pnpm run build`, exportación Expo Android y auditoría estática independiente pasaron. No se probó registro real ni se desplegó Firebase.
+- [x] **Aprobación de solicitud ingresada manualmente:** el estado pendiente continúa mostrando `role/rol: "cliente"` hasta aprobar. La promoción convierte cumpleaños numéricos escritos como texto a números; el botón muestra una explicación amable si falta la función publicada o no hay permisos.
+- [ ] Publicar en producción `solicitarPerfilEmpleado`, `aprobarSolicitudEmpleado` y `rechazarSolicitudEmpleado`; la pantalla puede mostrar solicitudes con Firestore, pero aceptar/rechazar requiere las funciones. Esta entrega no ejecutó el despliegue.
 
 - [x] `pnpm check`: TypeScript completo sin errores.
 - [x] `pnpm lint`: sin errores; aparece solo un aviso no bloqueante sobre configuración ESM de ESLint.

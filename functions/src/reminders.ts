@@ -584,6 +584,21 @@ async function approveEmployeeRequest(adminUid: string, uid: string) {
     const phone = String(source.phone ?? source.telefono ?? current.phone ?? "").trim();
     if (name.length < 2 || !phone) throw new HttpsError("failed-precondition", "La solicitud necesita nombre y teléfono válidos antes de aceptarse.");
     const profileImage = String(source.profileImage ?? source.photoURL ?? current.profileImage ?? "");
+    const birthdayDayValue = source.birthdayDay ?? current.birthdayDay;
+    const birthdayMonthValue = source.birthdayMonth ?? current.birthdayMonth;
+    const birthdayDay = typeof birthdayDayValue === "number"
+      ? birthdayDayValue
+      : typeof birthdayDayValue === "string" && /^\d{1,2}$/.test(birthdayDayValue) ? Number(birthdayDayValue) : null;
+    const birthdayMonth = typeof birthdayMonthValue === "number"
+      ? birthdayMonthValue
+      : typeof birthdayMonthValue === "string" && /^\d{1,2}$/.test(birthdayMonthValue) ? Number(birthdayMonthValue) : null;
+    const maximumBirthdayDay = birthdayMonth === 2 ? 29
+      : [4, 6, 9, 11].includes(birthdayMonth ?? 0) ? 30
+        : [1, 3, 5, 7, 8, 10, 12].includes(birthdayMonth ?? 0) ? 31 : 0;
+    const birthdayFields = birthdayDay !== null && birthdayMonth !== null
+      && birthdayDay >= 1 && birthdayDay <= maximumBirthdayDay
+      ? { birthdayDay, birthdayMonth }
+      : {};
     const negocioNombre = businessSnapshot
       ? String(businessSnapshot.get("nombre") ?? businessSnapshot.get("nombreNegocio") ?? "EUFORIA Beauty Studio")
       : "EUFORIA Beauty Studio";
@@ -612,9 +627,7 @@ async function approveEmployeeRequest(adminUid: string, uid: string) {
       phone,
       profileImage,
       photoURL: String(source.photoURL ?? profileImage),
-      ...(Number.isInteger(source.birthdayDay) && Number.isInteger(source.birthdayMonth)
-        ? { birthdayDay: source.birthdayDay, birthdayMonth: source.birthdayMonth }
-        : {}),
+      ...birthdayFields,
       aceptaRecordatoriosWhatsApp: consent,
       role: "empleado",
       rol: "empleado",
