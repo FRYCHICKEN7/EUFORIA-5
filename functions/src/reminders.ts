@@ -21,6 +21,7 @@ export type ReminderConfiguration = { horasAntesCita: number; plantillas: Remind
 type ReminderSettingsInput = { negocioId: string; horasAntesCita: number; plantillas: ReminderTemplates };
 type ReminderActionInput = { recordatorioId: string; estado: "preparado" | "enviado" | "omitido" | "cancelado" };
 type EmployeeDecisionInput = { uid: string };
+type EmployeeApplicationInput = { name?: unknown; phone?: unknown; birthdayDay?: unknown; birthdayMonth?: unknown };
 
 export const DEFAULT_REMINDER_CONFIGURATION: ReminderConfiguration = {
   horasAntesCita: 73,
@@ -450,7 +451,7 @@ async function createReturnReminder(citaId: string, appointment: DocumentData) {
   });
 }
 
-export const solicitarPerfilEmpleado = onCall(async (request) => {
+export const solicitarPerfilEmpleado = onCall<EmployeeApplicationInput>(async (request) => {
   const uid = request.auth?.uid;
   if (!uid) throw new HttpsError("unauthenticated", "Inicia sesión para enviar la solicitud.");
   const authUser = await getAuth(app).getUser(uid).catch(() => {
@@ -466,19 +467,52 @@ export const solicitarPerfilEmpleado = onCall(async (request) => {
       loadProfileInTransaction(transaction, uid),
       transaction.get(employeeRef),
     ]);
-    if (!person.profile || person.role !== "cliente") {
-      throw new HttpsError("failed-precondition", "Solo un perfil cliente puede solicitar acceso al equipo.");
-    }
     const current = existing.data() ?? {};
     if (existing.exists && current.estadoSolicitud === "pendiente") return { ok: true as const, estado: "pendiente" as const };
     if (existing.exists && (current.role === "empleado" || current.rol === "empleado")) {
       throw new HttpsError("already-exists", "Esta cuenta ya tiene acceso como empleado.");
     }
-    const name = String(person.profile.name ?? person.profile.displayName ?? person.profile.nombre ?? "").trim();
-    const phone = String(person.profile.phone ?? person.profile.telefono ?? "").trim();
+    if (person.profile && person.role !== "cliente") {
+      throw new HttpsError("failed-precondition", "Solo un perfil cliente puede solicitar acceso al equipo.");
+    }
+    const submittedName = typeof request.data?.name === "string" ? request.data.name.trim() : "";
+    const submittedPhone = typeof request.data?.phone === "string" ? request.data.phone.trim() : "";
+    const name = String(person.profile?.name ?? person.profile?.displayName ?? person.profile?.nombre ?? submittedName).trim();
+    const phone = String(person.profile?.phone ?? person.profile?.telefono ?? submittedPhone).trim();
     if (name.length < 2 || !phone) throw new HttpsError("failed-precondition", "Completa tu nombre y teléfono en el perfil antes de solicitar acceso.");
+    if (!/^([0-9]{8}|\+[1-9][0-9]{7,14})$/.test(phone)) {
+      throw new HttpsError("invalid-argument", "Escribe un teléfono hondureño de ocho dígitos o un número internacional con +.");
+    }
+    const birthdayDay = person.profile?.birthdayDay ?? request.data?.birthdayDay;
+    const birthdayMonth = person.profile?.birthdayMonth ?? request.data?.birthdayMonth;
+    const hasBirthday = birthdayDay !== undefined && birthdayDay !== null && birthdayMonth !== undefined && birthdayMonth !== null;
+    if ((birthdayDay !== undefined && birthdayDay !== null) !== (birthdayMonth !== undefined && birthdayMonth !== null)
+      || (hasBirthday && (!Number.isInteger(birthdayDay) || !Number.isInteger(birthdayMonth)
+        || Number(birthdayDay) < 1 || Number(birthdayDay) > 31 || Number(birthdayMonth) < 1 || Number(birthdayMonth) > 12
+        || (Number(birthdayMonth) === 2 && Number(birthdayDay) > 29)
+        || ([4, 6, 9, 11].includes(Number(birthdayMonth)) && Number(birthdayDay) > 30)))) {
+      throw new HttpsError("invalid-argument", "La fecha de cumpleaños no es válida.");
+    }
     const admins = await adminRecipientUids(transaction);
-    const profileImage = String(person.profile.profileImage ?? person.profile.photoURL ?? "");
+    const profileImage = String(person.profile?.profileImage ?? person.profile?.photoURL ?? "");
+    const profileData: DocumentData = person.profile ?? {
+      id: uid,
+      email: authUser.email,
+      name,
+      displayName: name,
+      phone,
+      profileImage,
+      role: "cliente",
+      rol: "cliente",
+      createdAt: now,
+      aceptaRecordatoriosWhatsApp: true,
+      ...(hasBirthday ? { birthdayDay: Number(birthdayDay), birthdayMonth: Number(birthdayMonth) } : {}),
+    };
+    if (!person.profile) {
+      for (const collectionName of ["users", "usuarios"] as const) {
+        transaction.create(db.collection(collectionName).doc(uid), profileData);
+      }
+    }
     transaction.set(employeeRef, {
       id: uid,
       email: authUser.email,
@@ -486,8 +520,8 @@ export const solicitarPerfilEmpleado = onCall(async (request) => {
       displayName: name,
       phone,
       profileImage,
-      ...(Number.isInteger(person.profile.birthdayDay) && Number.isInteger(person.profile.birthdayMonth)
-        ? { birthdayDay: person.profile.birthdayDay, birthdayMonth: person.profile.birthdayMonth }
+      ...(Number.isInteger(profileData.birthdayDay) && Number.isInteger(profileData.birthdayMonth)
+        ? { birthdayDay: profileData.birthdayDay, birthdayMonth: profileData.birthdayMonth }
         : {}),
       role: "cliente",
       rol: "cliente",

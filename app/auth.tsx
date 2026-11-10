@@ -130,6 +130,7 @@ export default function AuthScreen() {
       let profile = await loadUserProfile(credential.user.uid);
 
       if (mode === "register") {
+        let employeeRequestSent = false;
         if (recoveredExistingEmployeeAccount && profile && profileRole(profile) !== "cliente") {
           await signOut(auth);
           setMode("login");
@@ -154,13 +155,33 @@ export default function AuthScreen() {
             aceptaRecordatoriosWhatsApp: true,
             ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
           };
-          const batch = writeBatch(store);
-          batch.set(doc(store, "users", credential.user.uid), profileData);
-          batch.set(doc(store, "usuarios", credential.user.uid), profileData);
-          await batch.commit();
-          profile = await loadUserProfile(credential.user.uid);
+          if (role === "empleado") {
+            try {
+              await solicitarPerfilEmpleado({
+                name: name.trim(),
+                phone: normalizedPhone!,
+                ...(birthdayDay && birthdayMonth ? { birthdayDay, birthdayMonth } : {}),
+              });
+              employeeRequestSent = true;
+              profile = await loadUserProfile(credential.user.uid);
+            } catch (requestError) {
+              console.warn("No se pudo completar el envío de la solicitud de empleado.", (requestError as { code?: string })?.code);
+              await signOut(auth);
+              setMode("login");
+              setStaffAccessVisible(true);
+              setRole("empleado");
+              setMessage(getEmployeeRequestErrorMessage(requestError));
+              return;
+            }
+          } else {
+            const batch = writeBatch(store);
+            batch.set(doc(store, "users", credential.user.uid), profileData);
+            batch.set(doc(store, "usuarios", credential.user.uid), profileData);
+            await batch.commit();
+            profile = await loadUserProfile(credential.user.uid);
+          }
         }
-        if (role === "empleado") {
+        if (role === "empleado" && !employeeRequestSent) {
           try {
             await solicitarPerfilEmpleado();
           } catch (requestError) {

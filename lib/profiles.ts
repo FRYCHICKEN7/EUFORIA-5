@@ -183,10 +183,17 @@ export function subscribePendingEmployeeRequests(
   }, error);
 }
 
-export async function solicitarPerfilEmpleado() {
+export type EmployeeApplicationProfile = {
+  name: string;
+  phone: string;
+  birthdayDay?: number;
+  birthdayMonth?: number;
+};
+
+export async function solicitarPerfilEmpleado(input?: EmployeeApplicationProfile) {
   if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<Record<string, never>, { ok: true }>(functions, "solicitarPerfilEmpleado");
-  return (await callable({})).data;
+  const callable = httpsCallable<EmployeeApplicationProfile | Record<string, never>, { ok: true; estado?: "pendiente" }>(functions, "solicitarPerfilEmpleado");
+  return (await callable(input ?? {})).data;
 }
 
 export async function aprobarSolicitudEmpleado(input: { uid: string }) {

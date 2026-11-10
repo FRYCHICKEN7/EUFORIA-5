@@ -69,13 +69,13 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 
 ### Solicitud y aprobación de empleado
 
-1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos de la cuenta. Se crea primero un perfil cliente y se envía una solicitud; el perfil no obtiene acceso al área del equipo mientras esté pendiente.
+1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos de la cuenta. El servidor guarda en una sola operación el perfil de acceso base y la solicitud en `empleados/{uid}`. Si la operación falla, no queda un perfil cliente nuevo sin su solicitud; si la cuenta de acceso ya existía de un intento anterior, puede reintentar con la misma cuenta. El rol de acceso no obtiene permisos de empleado hasta que administración acepte.
 2. **Clientes y equipo** ofrece las pestañas **Clientes** y **Empleados**. En **Empleados** se muestran por separado las solicitudes pendientes y los empleados aceptados. Administración solo puede **Aceptar** o **Rechazar** solicitudes; ya no registra empleados ni asigna códigos manualmente.
 3. Las funciones verifican el rol administrativo y la solicitud. Si se acepta, se asigna el único negocio activo; si no existe, se crea **EUFORIA Beauty Studio** activo. Si hay varios negocios activos, la aceptación se detiene para evitar asignar al negocio equivocado. El rol empleado y la membresía del negocio se guardan únicamente después de aceptar.
 4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
 5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.
 
-Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el archivo `empleados/{uid}` se crea solo al completar la solicitud. Las solicitudes rechazadas permanecen en `empleados/{uid}` para que esa persona no aparezca como cliente.
+Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el documento de `empleados/{uid}` se crea al completar la solicitud y contiene `estadoSolicitud: "pendiente"`. Es normal que `users/{uid}` y `usuarios/{uid}` conserven `role: "cliente"` mientras la solicitud está pendiente: esos documentos son el acceso base y no son la solicitud. Las solicitudes rechazadas permanecen en `empleados/{uid}` para que esa persona no aparezca como cliente.
 
 ### Crear cuentas de clientes con contraseña provisional
 
@@ -160,8 +160,11 @@ firebase deploy --project euforia-e76a6 --only firestore:indexes
 # 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
 firebase deploy --project euforia-e76a6 --only functions
 
-# Si se necesita actualizar solo el flujo de solicitudes y las nuevas funciones de clientes
-firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado,functions:crearCuentaCliente,functions:cambiarContrasenaProvisional
+# Para aplicar el guardado atómico de la solicitud de empleado
+firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado
+
+# Si además falta publicar las funciones de cuentas provisionales
+firebase deploy --project euforia-e76a6 --only functions:crearCuentaCliente,functions:cambiarContrasenaProvisional
 ```
 
 Esta mejora no añade índices ni requiere cambiar Rules: las reglas existentes ya permiten que administración lea `empleados` y bloquean al cliente cambiar los campos que solo escribe el servidor. Para corregir el registro fallido anterior y habilitar las cuentas provisionales, despliega las tres funciones indicadas o todas las Functions. Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.
@@ -181,7 +184,7 @@ pnpm install
 pnpm run build
 ```
 
-Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 49 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC y 19 rutas Web estáticas. Esos bundles no generan APK/EAS ni prueban guardado local, WhatsApp o avisos nativos en un teléfono. Firestore Emulator arrancó bajo el proyecto de demostración `demo-euforia`, sin conectar con producción. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
+Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 49 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC. La auditoría estática confirmó que perfiles y solicitud pendiente se guardan en la misma transacción. El bundle no genera APK/EAS ni prueba una llamada real a Firebase desde un teléfono. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
 
 ## Pendientes fuera de esta fase
 

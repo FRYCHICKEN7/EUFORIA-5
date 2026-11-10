@@ -34,6 +34,10 @@
 
 ## Verificaciones ejecutadas en esta versión
 
+- [x] **Registro de empleado atómico:** al elegir **Empleado** durante el registro, el servidor crea en una sola transacción `users/{uid}`, `usuarios/{uid}` como perfil de acceso cliente y `empleados/{uid}` con `estadoSolicitud: "pendiente"`. Los perfiles base conservan `role/rol: "cliente"` hasta que administración apruebe; el documento de solicitud queda separado y se muestra en la pestaña **Empleados**. Una interrupción no debe dejar un perfil nuevo solo en Clientes. Se mantienen recuperación e idempotencia para cuentas existentes.
+- [ ] Desplegar la versión actualizada de `solicitarPerfilEmpleado` y actualizar la app instalada; las versiones/funciones anteriores no ejecutan la nueva operación atómica.
+- [x] Para este cambio: `pnpm check`, `pnpm lint`, `pnpm test` (49 aprobadas, 1 omitida), `cd functions && pnpm run build`, exportación Expo Android y auditoría estática independiente pasaron. No se probó registro real ni se desplegó Firebase.
+
 - [x] `pnpm check`: TypeScript completo sin errores.
 - [x] `pnpm lint`: sin errores; aparece solo un aviso no bloqueante sobre configuración ESM de ESLint.
 - [x] `pnpm test`: 49 pruebas aprobadas, 1 prueba previa omitida.
