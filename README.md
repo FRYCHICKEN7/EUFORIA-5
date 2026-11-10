@@ -81,6 +81,8 @@ Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelva
 
 Desde **Clientes y equipo → Clientes → Crear cliente**, administración ingresa nombre, correo, teléfono hondureño o internacional, cumpleaños opcional y una contraseña provisional de al menos 8 caracteres. El servidor crea la cuenta y los perfiles `users/{uid}` y `usuarios/{uid}` con el mismo UID y rol cliente. La contraseña solo se usa para crear la cuenta de acceso: no se guarda en Firestore, en las copias ni en registros. Se muestra a administración solo mientras el formulario sigue abierto para poder entregarla de forma privada. Al entrar por primera vez, el cliente debe escribir la contraseña actual, elegir otra y confirmarla; hasta completar el cambio, todas las pantallas de cliente lo devuelven a esa acción. Si la contraseña se actualizó pero la conexión se interrumpió antes de terminar, el cliente puede volver a intentar usando como actual la última que eligió. Después puede cambiar su contraseña desde el botón **Cambiar contraseña** del catálogo. El campo `mustChangePassword` solo lo administra el servidor y las reglas actuales impiden que el cliente lo cambie directamente.
 
+Si la cuenta se creó pero una interrupción impidió terminar los perfiles, administración puede repetir el alta con el mismo correo y una nueva contraseña provisional; el servidor retoma la cuenta existente, completa los perfiles y elimina la marca interna de recuperación. Esa marca no incluye la contraseña y solo la usa el servidor. Si el correo ya pertenece a una cuenta distinta, la aplicación no la reutiliza.
+
 ## Firestore: datos del negocio
 
 No hay precios, servicios, empleados ni horarios de muestra. Antes de aceptar citas, configura datos reales:

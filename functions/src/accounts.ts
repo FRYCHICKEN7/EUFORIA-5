@@ -1,7 +1,8 @@
 import { getApp, getApps, initializeApp } from "firebase-admin/app";
-import { getAuth } from "firebase-admin/auth";
+import { getAuth, type UserRecord } from "firebase-admin/auth";
 import { Timestamp, getFirestore } from "firebase-admin/firestore";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import { createHash, randomUUID } from "node:crypto";
 import { mergeProfileDocuments, roleFromProfiles } from "./roles";
 
 const app = getApps().length ? getApp() : initializeApp();
@@ -48,6 +49,15 @@ async function loadProfileSources(uid: string) {
   return { snapshots, sources, profile: mergeProfileDocuments(sources, uid), role: roleFromProfiles(sources) };
 }
 
+async function getAuthUserIfPresent(uid: string): Promise<UserRecord | null> {
+  try {
+    return await auth.getUser(uid);
+  } catch (reason) {
+    if ((reason as { code?: string }).code === "auth/user-not-found") return null;
+    throw reason;
+  }
+}
+
 export const crearCuentaCliente = onCall<CreateCustomerAccountInput>(async (request) => {
   const adminUid = request.auth?.uid;
   if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión para continuar.");
@@ -78,22 +88,104 @@ export const crearCuentaCliente = onCall<CreateCustomerAccountInput>(async (requ
     throw new HttpsError("invalid-argument", "La fecha de cumpleaños no es válida.");
   }
 
-  let createdUser;
+  const reservationId = createHash("sha256").update(email).digest("hex");
+  const reservationRef = db.collection("pendingClientAccountCreations").doc(reservationId);
+  let reservedUid = "";
   try {
-    createdUser = await auth.createUser({ email, password: temporaryPassword, displayName: name });
+    await db.runTransaction(async (transaction) => {
+      const existingReservation = await transaction.get(reservationRef);
+      if (existingReservation.exists) {
+        const reservation = existingReservation.data();
+        if (!reservation || reservation.email !== email || typeof reservation.uid !== "string" || !reservation.uid) {
+          throw new HttpsError("failed-precondition", "No pudimos recuperar esta alta. Solicita ayuda a otra persona de administración.");
+        }
+        reservedUid = reservation.uid;
+        return;
+      }
+
+      reservedUid = randomUUID();
+      transaction.create(reservationRef, {
+        email,
+        uid: reservedUid,
+        createdByUid: adminUid,
+        createdAt: Timestamp.now(),
+      });
+    });
   } catch (reason) {
-    const code = (reason as { code?: string }).code ?? "";
-    if (code === "auth/email-already-exists") {
-      throw new HttpsError("already-exists", "Este correo ya tiene una cuenta. Usa otro correo o solicita acceso a administración.");
+    if (reason instanceof HttpsError) throw reason;
+    console.warn("No se pudo preparar el alta de cliente.", (reason as { code?: string }).code ?? "");
+    throw new HttpsError("unavailable", "No pudimos iniciar el alta. Intenta de nuevo.");
+  }
+
+  let authUser: UserRecord | null;
+  try {
+    authUser = await getAuthUserIfPresent(reservedUid);
+  } catch (reason) {
+    console.warn("No se pudo revisar la cuenta de cliente.", (reason as { code?: string }).code ?? "");
+    throw new HttpsError("unavailable", "No pudimos continuar el alta. Intenta de nuevo con el mismo correo.");
+  }
+
+  if (authUser && normalizeEmail(authUser.email) !== email) {
+    throw new HttpsError("failed-precondition", "No pudimos recuperar esta alta. Solicita ayuda a otra persona de administración.");
+  }
+
+  if (authUser) {
+    try {
+      await auth.updateUser(reservedUid, { password: temporaryPassword, displayName: name, disabled: false });
+    } catch (reason) {
+      console.warn("No se pudo retomar el alta de cliente.", (reason as { code?: string }).code ?? "");
+      throw new HttpsError("unavailable", "No pudimos continuar el alta. Intenta de nuevo con el mismo correo.");
     }
-    if (code === "auth/invalid-email") throw new HttpsError("invalid-argument", "El correo electrónico no es válido.");
-    console.warn("No se pudo crear la cuenta de cliente.", code);
-    throw new HttpsError("internal", "No pudimos crear la cuenta. Revisa los datos e inténtalo de nuevo.");
+  } else {
+    try {
+      await auth.createUser({ uid: reservedUid, email, password: temporaryPassword, displayName: name });
+    } catch (reason) {
+      const code = (reason as { code?: string }).code ?? "";
+      if (code === "auth/email-already-exists") {
+        let existingByEmail: UserRecord;
+        try {
+          existingByEmail = await auth.getUserByEmail(email);
+        } catch (lookupReason) {
+          console.warn("No se pudo confirmar el correo de una cuenta existente.", (lookupReason as { code?: string }).code ?? "");
+          throw new HttpsError("unavailable", "No pudimos confirmar si esta cuenta ya existe. Intenta de nuevo con el mismo correo.");
+        }
+        if (existingByEmail.uid !== reservedUid) {
+          await reservationRef.delete().catch((cleanupReason) => {
+            console.error("No se pudo retirar la marca de un alta cancelada.", (cleanupReason as { code?: string }).code ?? "");
+          });
+          throw new HttpsError("already-exists", "Este correo ya tiene una cuenta. Usa otro correo o solicita acceso a administración.");
+        }
+        try {
+          await auth.updateUser(reservedUid, { password: temporaryPassword, displayName: name, disabled: false });
+        } catch (retryReason) {
+          console.warn("No se pudo retomar el alta de cliente.", (retryReason as { code?: string }).code ?? "");
+          throw new HttpsError("unavailable", "No pudimos continuar el alta. Intenta de nuevo con el mismo correo.");
+        }
+      } else if (code === "auth/invalid-email") {
+        await reservationRef.delete().catch(() => undefined);
+        throw new HttpsError("invalid-argument", "El correo electrónico no es válido.");
+      } else if (code === "auth/uid-already-exists") {
+        try {
+          const concurrentUser = await auth.getUser(reservedUid);
+          if (normalizeEmail(concurrentUser.email) !== email) {
+            throw new HttpsError("failed-precondition", "No pudimos recuperar esta alta. Solicita ayuda a otra persona de administración.");
+          }
+          await auth.updateUser(reservedUid, { password: temporaryPassword, displayName: name, disabled: false });
+        } catch (retryReason) {
+          if (retryReason instanceof HttpsError) throw retryReason;
+          console.warn("No se pudo retomar el alta de cliente.", (retryReason as { code?: string }).code ?? "");
+          throw new HttpsError("unavailable", "No pudimos continuar el alta. Intenta de nuevo con el mismo correo.");
+        }
+      } else {
+        console.warn("No se pudo crear la cuenta de cliente.", code);
+        throw new HttpsError("unavailable", "No pudimos crear la cuenta. Intenta de nuevo con el mismo correo.");
+      }
+    }
   }
 
   const now = Timestamp.now();
   const profile = {
-    id: createdUser.uid,
+    id: reservedUid,
     email,
     name,
     displayName: name,
@@ -110,20 +202,18 @@ export const crearCuentaCliente = onCall<CreateCustomerAccountInput>(async (requ
   try {
     const batch = db.batch();
     for (const collectionName of CUSTOMER_PROFILE_COLLECTIONS) {
-      batch.set(db.collection(collectionName).doc(createdUser.uid), profile);
+      batch.set(db.collection(collectionName).doc(reservedUid), profile);
     }
+    batch.delete(reservationRef);
     await batch.commit();
   } catch (reason) {
     const code = (reason as { code?: string }).code ?? "";
-    await auth.deleteUser(createdUser.uid).catch((cleanupReason) => {
-      console.error("No se pudo retirar una cuenta incompleta.", (cleanupReason as { code?: string }).code ?? "");
-    });
     console.error("No se pudieron guardar los perfiles del cliente.", code);
-    throw new HttpsError("internal", "No pudimos guardar el perfil de cliente. Intenta de nuevo.");
+    throw new HttpsError("unavailable", "No pudimos terminar el alta. Intenta de nuevo con el mismo correo y una nueva contraseña provisional.");
   }
 
   // The provisional password is never returned, saved in Firestore, or written to logs.
-  return { ok: true as const, uid: createdUser.uid, email };
+  return { ok: true as const, uid: reservedUid, email };
 });
 
 export const cambiarContrasenaProvisional = onCall<ChangeTemporaryPasswordInput>(async (request) => {
