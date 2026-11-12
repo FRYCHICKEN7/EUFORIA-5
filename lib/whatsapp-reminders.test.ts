@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { birthdayIsToday, DEFAULT_REMINDER_LEAD_HOURS, isSafeReminderMessage, reminderAppointmentDue, renderReminderTemplate, returnReminderDate } from "./whatsapp-reminder-logic";
+import { birthdayIsToday, buildManualReminderCandidates, DEFAULT_REMINDER_LEAD_HOURS, isSafeReminderMessage, reminderAppointmentDue, renderReminderTemplate, returnReminderDate } from "./whatsapp-reminder-logic";
 
 describe("recordatorios WhatsApp: utilidades puras", () => {
   it("resuelve solo variables permitidas y elimina valores sin resolver", () => {
@@ -23,5 +23,57 @@ describe("recordatorios WhatsApp: utilidades puras", () => {
   it("reconoce cumpleaños y aplica 29 de febrero el 28 en años no bisiestos", () => {
     expect(birthdayIsToday(8, 11, new Date("2026-11-08T18:00:00Z"))).toBe(true);
     expect(birthdayIsToday(29, 2, new Date("2025-02-28T18:00:00Z"))).toBe(true);
+  });
+
+  it("genera el aviso manual exactamente dentro del plazo de 73 horas y omite a quien lo pausó", () => {
+    const now = Date.parse("2026-11-12T18:00:00Z");
+    const start = now + 72 * 3_600_000;
+    const candidates = buildManualReminderCandidates({
+      negocioId: "salon",
+      now,
+      clientes: [
+        { id: "c1", name: "Ana", phone: "12345678" },
+        { id: "c2", name: "Luz", phone: "12345678", aceptaRecordatoriosWhatsApp: false },
+      ],
+      citas: [
+        { id: "a1", negocioId: "salon", estado: "confirmada", clienteId: "c1", servicioId: "s1", inicio: start },
+        { id: "a2", negocioId: "salon", estado: "confirmada", clienteId: "c2", servicioId: "s1", inicio: start },
+      ],
+      servicios: [{ id: "s1", nombre: "Corte" }],
+    });
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]).toMatchObject({ id: "cita-a1", tipo: "cita", clienteId: "c1", fechaProgramada: start - 73 * 3_600_000 });
+  });
+
+  it("genera el cumpleaños hondureño de hoy y no lo repite para personas que pausaron avisos", () => {
+    const now = Date.parse("2026-11-12T18:00:00Z");
+    const candidates = buildManualReminderCandidates({
+      negocioId: "salon",
+      now,
+      clientes: [
+        { id: "cumple", name: "Ana", birthdayDay: "12", birthdayMonth: "11" },
+        { id: "pausa", name: "Luz", birthdayDay: 12, birthdayMonth: 11, aceptaRecordatoriosWhatsApp: false },
+      ],
+      citas: [],
+      servicios: [],
+    });
+    expect(candidates.map((candidate) => candidate.id)).toEqual(["cumpleanos-cumple-2026"]);
+  });
+
+  it("programa el recordatorio de regreso una sola vez y lo omite si ya hay otra cita del servicio", () => {
+    const now = Date.parse("2026-02-01T18:00:00Z");
+    const completed = {
+      id: "finished", negocioId: "salon", estado: "finalizada", clienteId: "c1",
+      servicioId: "s1", servicioNombre: "Color", completedAt: Date.parse("2026-01-02T18:00:00Z"),
+    };
+    const base = {
+      negocioId: "salon", now,
+      clientes: [{ id: "c1", name: "Ana" }],
+      servicios: [{ id: "s1", nombre: "Color", recordatorioRegresoActivo: true, periodoRegresoDias: 30, anticipacionRecordatorioDias: 3 }],
+    };
+    expect(buildManualReminderCandidates({ ...base, citas: [completed] }).map((candidate) => candidate.id)).toContain("regreso-finished");
+    expect(buildManualReminderCandidates({ ...base, citas: [completed, {
+      id: "next", negocioId: "salon", estado: "confirmada", clienteId: "c1", servicioId: "s1", inicio: now + 7 * 86_400_000,
+    }] }).map((candidate) => candidate.id)).not.toContain("regreso-finished");
   });
 });

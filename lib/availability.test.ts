@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeAvailableSlots, hondurasDateTimeMs } from "../functions/src/availability";
+import { computeAvailableSlots, hondurasDateTimeMs, hondurasDayBounds } from "./availability";
 
 function at(date: string, time: string) {
   const [hour, minute] = time.split(":").map(Number);
@@ -75,5 +75,13 @@ describe("available appointment slots", () => {
 
   it("rejects impossible calendar dates", () => {
     expect(hondurasDateTimeMs("2026-02-30", 600)).toBeNull();
+  });
+
+  it("uses Honduran local midnight for the requested day", () => {
+    const bounds = hondurasDayBounds("2026-11-03");
+    expect(bounds).not.toBeNull();
+    if (!bounds) throw new Error("No se calcularon los límites del día.");
+    expect(bounds.endMs - bounds.startMs).toBe(24 * 60 * 60_000);
+    expect(new Date(bounds.startMs).toISOString()).toBe("2026-11-03T06:00:00.000Z");
   });
 });

@@ -207,6 +207,7 @@ export async function aprobarSolicitudEmpleado(input: { uid: string }) {
       throw new EmployeeFlowError("failed-precondition", "El negocio activo cambió. Actualiza la pantalla e inténtalo de nuevo.");
     }
     const membershipRef = doc(database, "negocios", businessRef.id, "empleados", uid);
+    const publicProfileRef = doc(database, "negocios", businessRef.id, "empleadosPublicos", uid);
     const membershipSnapshot = await transaction.get(membershipRef);
     if (membershipSnapshot.exists()) {
       throw new EmployeeFlowError("already-exists", "Esta cuenta ya está vinculada al negocio. Actualiza la pantalla y revisa el perfil.");
@@ -226,12 +227,13 @@ export async function aprobarSolicitudEmpleado(input: { uid: string }) {
 
     if (activeBusinesses.docs.length === 0) {
       if (businessSnapshot.exists()) {
-        transaction.update(businessRef, { activo: true, modoNegocio: "multiEmpleado", updatedAt: serverTimestamp() });
+        transaction.update(businessRef, { activo: true, modoNegocio: "multiEmpleado", reservasSparkPreparadas: false, updatedAt: serverTimestamp() });
       } else {
         transaction.set(businessRef, {
           nombre: "EUFORIA Beauty Studio",
           activo: true,
           modoNegocio: "multiEmpleado",
+          reservasSparkPreparadas: false,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -313,6 +315,21 @@ export async function aprobarSolicitudEmpleado(input: { uid: string }) {
       createdAt: serverTimestamp(),
       ...(birthday ?? {}),
     });
+    transaction.set(publicProfileRef, {
+      id: uid,
+      uid,
+      negocioId: businessRef.id,
+      Empleado: employeeCode,
+      name,
+      nombre: name,
+      displayName,
+      profileImage,
+      activo: true,
+      publica: true,
+      disponible: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
     transaction.set(notificationRef, {
       destinatarioId: uid,
       solicitanteUid: uid,
@@ -387,13 +404,14 @@ export async function createInitialBusiness() {
       if (existing.data().activo === true) {
         return { ok: true as const, created: false, businessId: stableBusinessRef.id, nombre: nonEmptyString(existing.data().nombre, existing.data().nombreNegocio) || "EUFORIA Beauty Studio" };
       }
-      transaction.update(stableBusinessRef, { activo: true, updatedAt: serverTimestamp() });
+      transaction.update(stableBusinessRef, { activo: true, reservasSparkPreparadas: false, updatedAt: serverTimestamp() });
       return { ok: true as const, created: false, businessId: stableBusinessRef.id, nombre: nonEmptyString(existing.data().nombre, existing.data().nombreNegocio) || "EUFORIA Beauty Studio" };
     }
     transaction.set(stableBusinessRef, {
       nombre: "EUFORIA Beauty Studio",
       activo: true,
       modoNegocio: "multiEmpleado",
+      reservasSparkPreparadas: false,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });

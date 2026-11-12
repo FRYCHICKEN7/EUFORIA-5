@@ -11,7 +11,6 @@ import { enrollBiometricFor, isBiometricEnrolledFor, isBiometricLoginAvailable }
 import { db, ensureFirebaseConfigured, firebaseAuth } from "@/lib/firebase";
 import { loadUserProfile, solicitarPerfilEmpleado } from "@/lib/profiles";
 import { profileRole } from "@/lib/roles";
-import { unregisterDeviceNotifications } from "@/lib/device-notifications";
 import { BirthdayPicker } from "@/components/birthday-picker";
 import { normalizeCustomerPhone } from "@/lib/customer-fields";
 
@@ -301,7 +300,7 @@ export default function AuthScreen() {
           <Pressable accessibilityRole="button" disabled={loading || sessionLoading} onPress={() => { setLoading(true); void unlockWithBiometrics().then((ok) => { if (!ok) setMessage("No se pudo validar la huella. También puedes confirmar con tu contraseña."); }).finally(() => setLoading(false)); }} style={[styles.biometricButton, (loading || sessionLoading) && styles.disabled]}>
             <Fingerprint size={18} color="#FFFFFF" /><Text style={styles.primaryText}>{loading || sessionLoading ? "Verificando…" : "Desbloquear con huella"}</Text>
           </Pressable>
-          <Pressable accessibilityRole="button" disabled={loading} onPress={() => { const auth = firebaseAuth; if (!auth) return; setLoading(true); void (async () => { if (activeUser?.uid) await unregisterDeviceNotifications(activeUser.uid); await signOut(auth); })().then(() => router.replace("/auth")).catch(() => setMessage("No se pudo cerrar la sesión. Comprueba la conexión e inténtalo otra vez.")).finally(() => setLoading(false)); }} style={styles.modalSkip}>
+          <Pressable accessibilityRole="button" disabled={loading} onPress={() => { const auth = firebaseAuth; if (!auth) return; setLoading(true); void signOut(auth).then(() => router.replace("/auth")).catch(() => setMessage("No se pudo cerrar la sesión. Comprueba la conexión e inténtalo otra vez.")).finally(() => setLoading(false)); }} style={styles.modalSkip}>
             <Text style={styles.linkText}>Cambiar de cuenta</Text>
           </Pressable>
         </View>}

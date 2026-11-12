@@ -5,14 +5,13 @@ import { router } from "expo-router";
 import { signOut } from "firebase/auth";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
-import { NotificationSetupCard } from "@/components/notification-setup-card";
 import { ScreenContainer } from "@/components/screen-container";
 import { BRAND } from "@/constants/brand";
 import { useAuthSession } from "@/lib/auth-session";
 import { markNotificationRead, subscribeNotifications, type AppNotification } from "@/lib/profiles";
 import { useThemeContext } from "@/lib/theme-provider";
 import { firebaseAuth } from "@/lib/firebase";
-import { unregisterDeviceNotifications } from "@/lib/device-notifications";
+import { profileRole } from "@/lib/roles";
 
 function NotificationCenter() {
   const { user, profile } = useAuthSession();
@@ -24,6 +23,7 @@ function NotificationCenter() {
   const [busyId, setBusyId] = useState("");
   const [signingOut, setSigningOut] = useState(false);
   const uid = user?.uid;
+  const includeAdminNotices = profileRole(profile) === "admin";
 
   useEffect(() => {
     if (!uid) return;
@@ -35,9 +35,9 @@ function NotificationCenter() {
       console.warn("No se pudo cargar la bandeja de avisos.", reason);
       setError("No pudimos cargar tus avisos. Intenta de nuevo.");
       setLoading(false);
-    });
+    }, includeAdminNotices);
     return unsubscribe;
-  }, [uid]);
+  }, [uid, includeAdminNotices]);
 
   const markRead = async (item: AppNotification) => {
     if (item.leida || busyId) return;
@@ -51,7 +51,6 @@ function NotificationCenter() {
     if (!firebaseAuth || signingOut) return;
     setSigningOut(true);
     try {
-      if (uid) await unregisterDeviceNotifications(uid);
       await signOut(firebaseAuth);
       router.replace("/auth");
     } catch {
@@ -67,9 +66,8 @@ function NotificationCenter() {
           <View style={styles.heading}>
             <Text style={[styles.eyebrow, isDark && { color: BRAND.onDarkText }]}>ACTUALIZACIONES DE TU CUENTA</Text>
             <Text style={[styles.title, isDark && { color: BRAND.onDarkText }]}>Notificaciones</Text>
-            <Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Solicitudes, citas y avisos dirigidos a tu perfil.</Text>
+            <Text style={[styles.subtitle, isDark && { color: BRAND.onDarkMutedText }]}>Solicitudes, citas y avisos dirigidos a tu perfil. Se actualizan al abrir la app con conexión a internet.</Text>
           </View>
-          {uid && <NotificationSetupCard uid={uid} />}
           {error ? <Text accessibilityRole="alert" style={[styles.error, isDark && { color: BRAND.onDarkText }]}>{error}</Text> : null}
           {loading ? <View style={styles.state}><ActivityIndicator color={BRAND.primary} /><Text style={styles.stateText}>Escuchando tus avisos…</Text></View> : items.length === 0 ? <View style={styles.empty}><Inbox size={26} color={BRAND.primary} /><Text style={styles.emptyTitle}>No hay notificaciones todavía</Text><Text style={styles.emptyText}>Los avisos aparecerán aquí cuando haya una actualización de tu cuenta.</Text></View> : items.map((item) => (
             <Pressable key={item.id} accessibilityRole="button" onPress={() => void markRead(item)} style={[styles.notice, item.leida === true && styles.read]}>

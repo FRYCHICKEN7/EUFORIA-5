@@ -77,6 +77,182 @@ export function birthdayIsToday(day: unknown, month: unknown, now = new Date()):
   return Number(day) === currentDay && Number(month) === currentMonth;
 }
 
+export type ManualReminderCandidate = {
+  id: string;
+  tipo: ReminderType;
+  estado: "pendiente";
+  negocioId: string;
+  clienteId: string;
+  citaId?: string;
+  servicioId?: string;
+  servicioNombre?: string;
+  clienteNombre: string;
+  clienteTelefono: string;
+  fechaProgramada: number;
+  citaFecha?: string;
+  citaHoraInicio?: string;
+  anticipacionRecordatorioDias?: number;
+  aniversarioAno?: number;
+};
+
+type ReminderClientSource = {
+  id: string;
+  name?: unknown;
+  displayName?: unknown;
+  nombre?: unknown;
+  phone?: unknown;
+  telefono?: unknown;
+  birthdayDay?: unknown;
+  birthdayMonth?: unknown;
+  aceptaRecordatoriosWhatsApp?: unknown;
+};
+
+type ReminderAppointmentSource = {
+  id: string;
+  negocioId?: string;
+  estado: string;
+  clienteId: string;
+  servicioId?: string;
+  servicioNombre?: string;
+  inicio?: unknown;
+  completedAt?: unknown;
+  updatedAt?: unknown;
+};
+
+type ReminderServiceSource = {
+  id: string;
+  nombre?: string;
+  recordatorioRegresoActivo?: boolean;
+  periodoRegresoDias?: number | null;
+  anticipacionRecordatorioDias?: number | null;
+};
+
+function displayName(person: ReminderClientSource): string {
+  const name = person.name ?? person.displayName ?? person.nombre;
+  return typeof name === "string" && name.trim() ? name.trim() : "Hola";
+}
+
+function localDateParts(milliseconds: number) {
+  return Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Tegucigalpa",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(milliseconds)).map((part) => [part.type, part.value]));
+}
+
+function appointmentDateLabel(milliseconds: number) {
+  return new Intl.DateTimeFormat("es-HN", {
+    timeZone: "America/Tegucigalpa", day: "numeric", month: "long", year: "numeric",
+  }).format(new Date(milliseconds));
+}
+
+function appointmentTimeLabel(milliseconds: number) {
+  return new Intl.DateTimeFormat("es-HN", {
+    timeZone: "America/Tegucigalpa", hour: "numeric", minute: "2-digit",
+  }).format(new Date(milliseconds));
+}
+
+export function buildManualReminderCandidates(input: {
+  negocioId: string;
+  clientes: readonly ReminderClientSource[];
+  citas: readonly ReminderAppointmentSource[];
+  servicios: readonly ReminderServiceSource[];
+  horasAntesCita?: number;
+  now?: number;
+}): ManualReminderCandidate[] {
+  const now = input.now ?? Date.now();
+  const leadHours = Number.isInteger(input.horasAntesCita) && Number(input.horasAntesCita) >= 1 && Number(input.horasAntesCita) <= 720
+    ? Number(input.horasAntesCita)
+    : DEFAULT_REMINDER_LEAD_HOURS;
+  const clients = new Map(input.clientes.map((client) => [client.id, client]));
+  const services = new Map(input.servicios.map((service) => [service.id, service]));
+  const candidates: ManualReminderCandidate[] = [];
+  const eligibleClient = (client: ReminderClientSource | undefined): client is ReminderClientSource => Boolean(client && client.aceptaRecordatoriosWhatsApp !== false);
+
+  for (const appointment of input.citas) {
+    if (appointment.negocioId && appointment.negocioId !== input.negocioId) continue;
+    const client = clients.get(appointment.clienteId);
+    if (!eligibleClient(client)) continue;
+    const service = appointment.servicioId ? services.get(appointment.servicioId) : undefined;
+    const serviceName = String(appointment.servicioNombre ?? service?.nombre ?? "Servicio");
+    const start = reminderMillis(appointment.inicio);
+
+    if (start !== null && reminderAppointmentDue({ estado: appointment.estado, inicio: appointment.inicio }, now, leadHours)) {
+      const dateParts = localDateParts(start);
+      candidates.push({
+        id: `cita-${appointment.id}`,
+        tipo: "cita",
+        estado: "pendiente",
+        negocioId: input.negocioId,
+        clienteId: client.id,
+        citaId: appointment.id,
+        servicioId: appointment.servicioId,
+        servicioNombre: serviceName,
+        clienteNombre: displayName(client),
+        clienteTelefono: String(client.phone ?? client.telefono ?? ""),
+        fechaProgramada: start - leadHours * 3_600_000,
+        citaFecha: appointmentDateLabel(start),
+        citaHoraInicio: appointmentTimeLabel(start),
+        aniversarioAno: Number(dateParts.year),
+      });
+    }
+
+    if (!service || service.recordatorioRegresoActivo !== true
+      || !["finalizada", "completada"].includes(appointment.estado)) continue;
+    const periodDays = Number(service.periodoRegresoDias);
+    const leadDays = Number.isInteger(service.anticipacionRecordatorioDias)
+      ? Number(service.anticipacionRecordatorioDias)
+      : 3;
+    const completedAt = appointment.completedAt ?? appointment.updatedAt;
+    const reminderDate = returnReminderDate(completedAt, periodDays, leadDays);
+    if (!reminderDate) continue;
+    const scheduledAt = reminderDate.getTime();
+    if (scheduledAt > now || scheduledAt < now - 30 * 86_400_000) continue;
+    const completedAtMillis = reminderMillis(completedAt);
+    const hasNewerAppointment = completedAtMillis !== null && input.citas.some((other) => {
+      if (other.clienteId !== appointment.clienteId || other.servicioId !== appointment.servicioId
+        || ["cancelada", "rechazada", "expirada"].includes(other.estado)) return false;
+      const otherStart = reminderMillis(other.inicio);
+      return otherStart !== null && otherStart > completedAtMillis;
+    });
+    if (hasNewerAppointment) continue;
+    candidates.push({
+      id: `regreso-${appointment.id}`,
+      tipo: "regreso",
+      estado: "pendiente",
+      negocioId: input.negocioId,
+      clienteId: client.id,
+      citaId: appointment.id,
+      servicioId: appointment.servicioId,
+      servicioNombre: serviceName,
+      clienteNombre: displayName(client),
+      clienteTelefono: String(client.phone ?? client.telefono ?? ""),
+      fechaProgramada: scheduledAt,
+      anticipacionRecordatorioDias: leadDays,
+    });
+  }
+
+  const birthdayParts = localDateParts(now);
+  const year = Number(birthdayParts.year);
+  for (const client of input.clientes) {
+    if (!eligibleClient(client) || !birthdayIsToday(Number(client.birthdayDay), Number(client.birthdayMonth), new Date(now))) continue;
+    candidates.push({
+      id: `cumpleanos-${client.id}-${year}`,
+      tipo: "cumpleanos",
+      estado: "pendiente",
+      negocioId: input.negocioId,
+      clienteId: client.id,
+      clienteNombre: displayName(client),
+      clienteTelefono: String(client.phone ?? client.telefono ?? ""),
+      fechaProgramada: now,
+      aniversarioAno: year,
+    });
+  }
+
+  return candidates.sort((left, right) => left.fechaProgramada - right.fechaProgramada || left.id.localeCompare(right.id));
+}
+
 function isLeapYear(year: number) {
   return year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
 }

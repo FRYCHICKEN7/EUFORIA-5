@@ -130,9 +130,9 @@ function ClientCatalogContent() {
     setNotice("");
     try {
       const result = await reserveAppointment({ negocioId: currentBusiness.id, servicioId: selectedService.id, inicio: slotStart, empleadoId: selectedEmployee.id });
-      setNotice(result.estado === "hold" || result.estado === "pendiente_de_aprobacion"
+      setNotice(result.avisosEnviados
         ? "Solicitud enviada. El empleado y administración recibieron un aviso dentro de la app; al confirmarla aparecerá inmediatamente en Tus citas."
-        : "Cita confirmada. Ya aparece en Tus citas.");
+        : "Tu solicitud quedó registrada, pero no pudimos mostrar el aviso. El equipo puede verla en la agenda; vuelve a revisar Tus citas en un momento.");
       setSelectedService(null);
       setAvailability(null);
       setEmployeeId("");

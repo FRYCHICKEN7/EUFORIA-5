@@ -79,13 +79,13 @@ export default function ChangePasswordScreen() {
       }
     } catch (error) {
       const code = (error as { code?: string }).code ?? "";
-      const mayHaveChangedPassword = code.includes("functions/unavailable");
+      const mayHaveChangedPassword = code.includes("password-updated-profile-pending");
       if (mayHaveChangedPassword) setPasswordMayAlreadyBeChanged(true);
       setMessage(mayHaveChangedPassword
         ? "La contraseña pudo actualizarse, pero falta terminar. Si lo intentas de nuevo, escribe como actual la última contraseña que elegiste."
         : code.includes("wrong-password") || code.includes("invalid-credential")
         ? "La contraseña actual no es correcta."
-        : code.includes("requires-recent-login") || code.includes("functions/failed-precondition")
+        : code.includes("requires-recent-login")
           ? "Por seguridad, vuelve a confirmar tu contraseña provisional e inténtalo de nuevo."
           : "No se pudo actualizar la contraseña. Intenta de nuevo.");
     } finally {

@@ -1,21 +1,12 @@
-import { useEffect } from "react";
 import { Bell, ChevronDown } from "lucide-react-native";
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { router } from "expo-router";
 import { BRAND } from "@/constants/brand";
-import { useAuthSession } from "@/lib/auth-session";
-import { bootstrapDeviceNotifications } from "@/lib/device-notifications";
 import { useThemeContext } from "@/lib/theme-provider";
 
 export function AppHeader({ name = "tu cuenta", onNotifications }: { name?: string; onNotifications?: () => void }) {
   const { colorScheme } = useThemeContext();
-  const { user, profile, loading } = useAuthSession();
-  const hasProfile = Boolean(profile);
   const isDark = colorScheme === "dark";
-
-  useEffect(() => {
-    if (!loading && user?.uid && hasProfile) void bootstrapDeviceNotifications(user.uid);
-  }, [user?.uid, loading, hasProfile]);
 
   const openNotifications = () => {
     if (onNotifications) onNotifications();

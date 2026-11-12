@@ -98,6 +98,14 @@
       ]
     },
     {
+      "collectionGroup": "bloqueosCitas",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "empleadoUid", "order": "ASCENDING" },
+        { "fieldPath": "fechaLocalKey", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "notificaciones",
       "queryScope": "COLLECTION",
       "fields": [

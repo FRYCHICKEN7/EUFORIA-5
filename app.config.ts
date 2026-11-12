@@ -59,7 +59,6 @@ const publicRuntime = {
     "",
   apiBaseUrl: process.env.EXPO_PUBLIC_API_BASE_URL ?? "",
 };
-const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID?.trim();
 const googleServicesJson = "./google-services.json";
 const googleServiceInfoPlist = "./GoogleService-Info.plist";
 
@@ -70,7 +69,6 @@ const config: ExpoConfig & { logoUrl: string } = {
   version: "1.0.0",
   extra: {
     ...publicRuntime,
-    ...(easProjectId ? { eas: { projectId: easProjectId } } : {}),
   },
   orientation: "portrait",
   icon: "./assets/images/icon.png",
@@ -94,7 +92,6 @@ const config: ExpoConfig & { logoUrl: string } = {
     },
     predictiveBackGestureEnabled: false,
     package: env.androidPackage,
-    permissions: ["POST_NOTIFICATIONS"],
     intentFilters: [
       {
         action: "VIEW",
@@ -118,7 +115,6 @@ const config: ExpoConfig & { logoUrl: string } = {
     "expo-asset",
     "expo-router",
     ["expo-local-authentication", { faceIDPermission: "EUFORIA usa Face ID para desbloquear de forma segura tu sesión guardada." }],
-    ["expo-notifications", { defaultChannel: "euforia", color: "#D85C7A" }],
     [
       "expo-audio",
       {

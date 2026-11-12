@@ -4,16 +4,16 @@ import { MessageCircle, Search, ShieldCheck } from "lucide-react-native";
 import { router } from "expo-router";
 import { AppHeader } from "@/components/app-header";
 import { AuthGate } from "@/components/auth-gate";
-import { NotificationSetupCard } from "@/components/notification-setup-card";
 import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
-import { appointmentMillis, loadBusinesses, type BusinessRecord } from "@/lib/appointments";
+import { appointmentMillis, loadBusinesses, loadServices, subscribeAdminReminderAppointments, type AppointmentRecord, type BusinessRecord, type ServiceRecord } from "@/lib/appointments";
 import { subscribeAdminClients, type CustomerProfile } from "@/lib/profiles";
 import { getWhatsAppUrl, normalizeWhatsAppNumber } from "@/lib/whatsapp";
 import {
   DEFAULT_REMINDER_LEAD_HOURS,
   DEFAULT_REMINDER_TEMPLATES,
+  buildManualReminderCandidates,
   isSafeReminderMessage,
   loadReminderConfiguration,
   renderReminderTemplate,
@@ -91,6 +91,8 @@ function NotifyContent() {
   const [businessId, setBusinessId] = useState("");
   const [clients, setClients] = useState<CustomerProfile[]>([]);
   const [reminders, setReminders] = useState<WhatsAppReminder[]>([]);
+  const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
+  const [services, setServices] = useState<ServiceRecord[]>([]);
   const [nowMillis, setNowMillis] = useState(0);
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<ReminderType | "todos">("todos");
@@ -166,6 +168,23 @@ function NotifyContent() {
           },
         ));
         if (businessId) {
+          setAppointments([]);
+          setServices([]);
+          setReminders([]);
+          void loadServices(businessId, true).then((items) => {
+            if (active) setServices(items);
+          }).catch((reason) => {
+            console.warn("No se pudieron cargar los servicios para los avisos.", reason);
+            if (active) setStatusMessage("No pudimos cargar los servicios para preparar los avisos.");
+          });
+          unsubscribers.push(subscribeAdminReminderAppointments(
+            businessId,
+            (items) => { if (active) setAppointments(items); },
+            (reason) => {
+              console.warn("No se pudieron actualizar las citas para los avisos.", reason);
+              if (active) setStatusMessage("No pudimos actualizar las citas para los avisos.");
+            },
+          ));
           unsubscribers.push(subscribeAdminWhatsAppReminders(
             businessId,
             (items) => { if (active) setReminders(items); },
@@ -187,13 +206,36 @@ function NotifyContent() {
     };
   }, [businessId]);
 
+  const candidates = useMemo(() => buildManualReminderCandidates({
+    negocioId: businessId,
+    clientes: clients,
+    citas: appointments,
+    servicios: services,
+    horasAntesCita: leadHours,
+    now: nowMillis,
+  }), [businessId, clients, appointments, services, leadHours, nowMillis]);
+
+  const allReminders = useMemo(() => {
+    const usedIds = new Set<string>();
+    const generated = candidates.map((candidate) => {
+      const saved = reminders.find((item) => item.id === candidate.id
+        || (item.tipo === candidate.tipo && candidate.citaId && item.citaId === candidate.citaId)
+        || (candidate.tipo === "cumpleanos" && item.tipo === "cumpleanos"
+          && item.clienteId === candidate.clienteId
+          && Number(item.aniversarioAno) === candidate.aniversarioAno));
+      if (saved) usedIds.add(saved.id);
+      return { ...candidate, ...(saved ?? {}), id: saved?.id ?? candidate.id, estado: saved?.estado ?? candidate.estado } as WhatsAppReminder;
+    });
+    return [...reminders.filter((item) => !usedIds.has(item.id)), ...generated];
+  }, [candidates, reminders]);
+
   const rows = useMemo(() => {
     if (!nowMillis) return [] as Row[];
     const clientsById = new Map(clients.map((client) => [client.id, client]));
     const activeBusiness = businesses.find((business) => business.id === businessId);
     const result: Row[] = [];
 
-    for (const reminder of reminders) {
+    for (const reminder of allReminders) {
       if (reminder.negocioId !== businessId || !["cita", "regreso", "cumpleanos"].includes(reminder.tipo)) continue;
       const scheduledAt = appointmentMillis(reminder.fechaProgramada);
       if (scheduledAt === null || scheduledAt > nowMillis) continue;
@@ -225,7 +267,7 @@ function NotifyContent() {
       const b = appointmentMillis(right.reminder.fechaProgramada) ?? 0;
       return a - b;
     });
-  }, [reminders, clients, businessId, businesses, templates, nowMillis]);
+  }, [allReminders, clients, businessId, businesses, templates, nowMillis]);
 
   const visibleRows = rows.filter((row) => {
     const text = `${row.client.name ?? row.client.displayName ?? row.client.nombre ?? ""} ${row.client.phone ?? row.client.telefono ?? ""}`.toLowerCase();
@@ -259,7 +301,7 @@ function NotifyContent() {
       return;
     }
     try {
-      await updateWhatsAppReminder(row.reminder.id, "preparado");
+      await updateWhatsAppReminder(row.reminder, "preparado");
     } catch (reason) {
       console.warn("No se pudo preparar el aviso antes de abrir WhatsApp.", reason);
       setStatusMessage("Este aviso cambió o ya no está disponible. Actualiza la lista antes de continuar.");
@@ -276,7 +318,7 @@ function NotifyContent() {
 
   const setReminderStatus = async (row: Row, nextStatus: ReminderStatus) => {
     try {
-      await updateWhatsAppReminder(row.reminder.id, nextStatus);
+      await updateWhatsAppReminder(row.reminder, nextStatus);
       setStatusMessage(nextStatus === "enviado" ? "El envío quedó confirmado por administración." : "El estado del aviso quedó actualizado.");
     } catch (reason) {
       console.warn("No se pudo actualizar el estado del aviso.", reason);
@@ -445,10 +487,9 @@ function NotifyContent() {
               <Text style={styles.secondaryText}>Ver perfiles de clientes</Text>
             </Pressable>
           </View>
-          {user?.uid && <NotificationSetupCard uid={user.uid} />}
           <View style={styles.note}>
             <ShieldCheck size={17} color={BRAND.success} />
-            <Text style={styles.noteText}>No se envían mensajes en segundo plano ni desde la vista previa.</Text>
+            <Text style={styles.noteText}>Los avisos se calculan mientras esta pantalla está abierta. No se envían mensajes en segundo plano; cada mensaje se abre y se confirma manualmente.</Text>
           </View>
         </ScrollView>
 

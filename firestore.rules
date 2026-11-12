@@ -25,6 +25,10 @@ service cloud.firestore {
       return /databases/$(database)/documents/negocios/$(businessId)/empleados/$(uid);
     }
 
+    function publicEmployeePath(businessId, uid) {
+      return /databases/$(database)/documents/negocios/$(businessId)/empleadosPublicos/$(uid);
+    }
+
     function normalizedRole(value) {
       return value is string
         ? (value.lower() in ['admin', 'administrador'] ? 'admin'
@@ -81,8 +85,42 @@ service cloud.firestore {
       return signedIn() && adminProfilesMatch(request.auth.uid);
     }
 
+    function profileClaimsAdmin(data) {
+      return data.get('role', '') in ['admin', 'administrador']
+        || data.get('rol', '') in ['admin', 'administrador'];
+    }
+
+    function hasAdminRoleHint(uid) {
+      let hasUser = exists(legacyUserPath(uid));
+      let hasUsuario = exists(userPath(uid));
+      let hasEmployee = exists(employeeProfilePath(uid));
+      return (hasUser && profileClaimsAdmin(get(legacyUserPath(uid)).data))
+        || (hasUsuario && profileClaimsAdmin(get(userPath(uid)).data))
+        || (hasEmployee && profileClaimsAdmin(get(employeeProfilePath(uid)).data));
+    }
+
     function isEmployee() {
       return signedIn() && profileRole(request.auth.uid) == 'empleado';
+    }
+
+    function isCustomer() {
+      return signedIn() && profileRole(request.auth.uid) == 'cliente';
+    }
+
+    function publicAvailabilityBusiness(negocioId) {
+      let business = get(businessPath(negocioId)).data;
+      return business.get('activo', false) == true
+        && business.get('reservasSparkPreparadas', false) == true
+        && business.get('reservasSparkPreparando', false) != true;
+    }
+
+    function canReadAppointmentLocks(negocioId) {
+      return isAdmin()
+        || (isEmployee()
+          && resource != null
+          && resource.data.get('empleadoUid', '') == request.auth.uid)
+        || (isCustomer()
+          && publicAvailabilityBusiness(negocioId));
     }
 
     function publicEmployee(data) {
@@ -324,6 +362,35 @@ service cloud.firestore {
           || data.get('aceptaRecordatoriosWhatsApp', true) is bool);
     }
 
+    function validAdminCustomerProfileCreate(uid) {
+      let data = request.resource.data;
+      return isAdmin()
+        && data.keys().hasOnly([
+          'id', 'email', 'role', 'rol', 'createdAt', 'name', 'displayName', 'phone',
+          'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp', 'mustChangePassword'
+        ])
+        && data.keys().hasAll([
+          'id', 'email', 'role', 'rol', 'createdAt', 'name', 'displayName', 'phone',
+          'profileImage', 'photoURL', 'aceptaRecordatoriosWhatsApp', 'mustChangePassword'
+        ])
+        && data.get('id', '') == uid
+        && data.get('email', '') is string
+        && data.get('email', '').size() <= 254
+        && data.get('email', '').matches('^[^\\s@]+@[^\\s@]+\\.[^\\s@]{2,}$')
+        && data.get('role', '') == 'cliente'
+        && data.get('rol', '') == 'cliente'
+        && data.get('name', '') is string && data.get('name', '').size() >= 2 && data.get('name', '').size() <= 100
+        && data.get('displayName', '') is string && data.get('displayName', '').size() >= 2 && data.get('displayName', '').size() <= 100
+        && validPhone(data)
+        && validBirthday(data)
+        && data.get('profileImage', '') is string && data.get('profileImage', '').size() <= 2048
+        && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048
+        && data.get('aceptaRecordatoriosWhatsApp', false) is bool
+        && data.get('mustChangePassword', false) == true
+        && data.get('createdAt', null) == request.time;
+    }
+
     function validAdminEmployeeApproval(uid) {
       return isAdmin()
         && resource.data.get('id', '') == uid
@@ -358,6 +425,7 @@ service cloud.firestore {
         && validPhone(request.resource.data)
         && validBirthday(request.resource.data)
         && approvedEmployeeAndMembershipAfter(uid, request.resource.data.get('negocioId', ''))
+        && existsAfter(publicEmployeePath(request.resource.data.get('negocioId', ''), uid))
         && approvedEmployeeProfilesAfter(uid, request.resource.data.get('negocioId', ''));
     }
 
@@ -381,6 +449,27 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'estadoSolicitud', 'rechazadaAt', 'rechazadaPorUid', 'updatedAt'
         ]);
+    }
+
+    function validOwnUserProfileUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let passwordChange = changed.hasAll(['mustChangePassword', 'passwordChangedAt'])
+        && resource.data.get('mustChangePassword', false) == true
+        && request.resource.data.get('mustChangePassword', false) == false
+        && request.resource.data.get('passwordChangedAt', null) == request.time;
+      return changed.hasOnly([
+          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp', 'mustChangePassword', 'passwordChangedAt'
+        ])
+        && (!changed.hasAny(['mustChangePassword', 'passwordChangedAt']) || passwordChange)
+        && validPhone(request.resource.data)
+        && validBirthday(request.resource.data)
+        && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
+        && request.resource.data.get('id', '') == resource.data.get('id', '')
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
     }
 
     function validOwnerEmployeeRequestRetry(uid) {
@@ -427,26 +516,693 @@ service cloud.firestore {
             && employee.get('rechazadaAt', null) == request.time));
     }
 
+    function activeOwnEmployeeBusiness(uid, businessId) {
+      let employeePath = employeeProfilePath(uid);
+      let membershipPath = businessEmployeePath(businessId, uid);
+      return signedIn()
+        && request.auth.uid == uid
+        && profileRole(uid) == 'empleado'
+        && exists(employeePath)
+        && get(employeePath).data.get('negocioId', '') == businessId
+        && get(employeePath).data.get('estadoSolicitud', '') == 'aprobada'
+        && get(employeePath).data.get('activo', false) == true
+        && exists(membershipPath)
+        && get(membershipPath).data.get('negocioId', '') == businessId
+        && get(membershipPath).data.get('usuarioId', '') == uid
+        && get(membershipPath).data.get('activo', false) == true;
+    }
+
+    function validAvailabilityScheduleDay(data, dayId) {
+      return data.keys().hasOnly(['dia', 'activo', 'inicio', 'fin', 'inicioMin', 'finMin', 'updatedAt'])
+        && data.keys().hasAll(['dia', 'activo', 'inicio', 'fin', 'inicioMin', 'finMin', 'updatedAt'])
+        && data.get('dia', -1) is int
+        && string(data.get('dia', -1)) == dayId
+        && data.get('activo', null) is bool
+        && data.get('inicio', '') is string
+        && data.get('inicio', '').matches('^(?:0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')
+        && data.get('fin', '') is string
+        && data.get('fin', '').matches('^(?:0[0-9]|1[0-9]|2[0-3]):[0-5][0-9]$')
+        && data.get('inicioMin', -1) is int
+        && data.get('inicioMin', -1) >= 0 && data.get('inicioMin', -1) < 1440
+        && data.get('finMin', -1) is int
+        && data.get('finMin', -1) > data.get('inicioMin', -1) && data.get('finMin', -1) <= 1440
+        && (!data.get('activo', false) || data.get('finMin', 0) > data.get('inicioMin', 0))
+        && data.get('updatedAt', null) == request.time;
+    }
+
+    function validPublicEmployeeCreate(data, uid, businessId) {
+      let employeePath = employeeProfilePath(uid);
+      let membershipPath = businessEmployeePath(businessId, uid);
+      let employee = getAfter(employeePath).data;
+      let membership = getAfter(membershipPath).data;
+      return data.keys().hasOnly([
+          'id', 'uid', 'negocioId', 'Empleado', 'name', 'nombre', 'displayName',
+          'profileImage', 'activo', 'publica', 'disponible', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'id', 'uid', 'negocioId', 'Empleado', 'name', 'nombre', 'displayName',
+          'profileImage', 'activo', 'publica', 'disponible', 'createdAt', 'updatedAt'
+        ])
+        && data.get('id', '') == uid
+        && data.get('uid', '') == uid
+        && data.get('negocioId', '') == businessId
+        && data.get('Empleado', '') == employee.get('Empleado', '')
+        && data.get('name', '') == employee.get('name', '')
+        && data.get('nombre', '') == employee.get('name', '')
+        && data.get('displayName', '') == employee.get('displayName', '')
+        && data.get('profileImage', '') == employee.get('profileImage', '')
+        && data.get('profileImage', '') is string
+        && data.get('profileImage', '').size() <= 2048
+        && data.get('activo', false) == true
+        && data.get('publica', false) == true
+        && data.get('disponible', true) == false
+        && data.get('createdAt', null) == request.time
+        && data.get('updatedAt', null) == request.time
+        && employee.get('role', '') == 'empleado'
+        && employee.get('rol', '') == 'empleado'
+        && employee.get('estadoSolicitud', '') == 'aprobada'
+        && employee.get('negocioId', '') == businessId
+        && employee.get('aprobadoPorUid', '') == request.auth.uid
+        && employee.get('aprobadaAt', null) == request.time
+        && employee.get('activo', false) == true
+        && employee.get('publica', false) == true
+        && employee.get('disponible', true) == false
+        && existsAfter(membershipPath)
+        && membership.get('uid', '') == uid
+        && membership.get('negocioId', '') == businessId
+        && membership.get('role', '') == 'empleado'
+        && membership.get('activo', false) == true;
+    }
+
+    function validOwnEmployeeAvailabilityUpdate(uid, businessId) {
+      let membershipPath = businessEmployeePath(businessId, uid);
+      let publicPath = publicEmployeePath(businessId, uid);
+      return activeOwnEmployeeBusiness(uid, businessId)
+        && resource.data.get('negocioId', '') == businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disponible', 'updatedAt'])
+        && request.resource.data.get('disponible', null) is bool
+        && request.resource.data.get('updatedAt', null) == request.time
+        && existsAfter(membershipPath)
+        && getAfter(membershipPath).data.get('disponible', null) == request.resource.data.get('disponible', null)
+        && existsAfter(publicPath)
+        && getAfter(publicPath).data.get('disponible', null) == request.resource.data.get('disponible', null);
+    }
+
+    function validOwnEmployeeMembershipAvailabilityUpdate(uid, businessId) {
+      let employeePath = employeeProfilePath(uid);
+      let publicPath = publicEmployeePath(businessId, uid);
+      return activeOwnEmployeeBusiness(uid, businessId)
+        && resource.data.get('negocioId', '') == businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disponible', 'updatedAt'])
+        && request.resource.data.get('disponible', null) is bool
+        && request.resource.data.get('updatedAt', null) == request.time
+        && existsAfter(employeePath)
+        && getAfter(employeePath).data.get('disponible', null) == request.resource.data.get('disponible', null)
+        && existsAfter(publicPath)
+        && getAfter(publicPath).data.get('disponible', null) == request.resource.data.get('disponible', null);
+    }
+
+    function validOwnPublicEmployeeAvailabilityUpdate(uid, businessId) {
+      let employeePath = employeeProfilePath(uid);
+      let membershipPath = businessEmployeePath(businessId, uid);
+      return activeOwnEmployeeBusiness(uid, businessId)
+        && resource.data.get('id', '') == uid
+        && resource.data.get('negocioId', '') == businessId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['disponible', 'updatedAt'])
+        && request.resource.data.get('disponible', null) is bool
+        && request.resource.data.get('updatedAt', null) == request.time
+        && existsAfter(employeePath)
+        && getAfter(employeePath).data.get('disponible', null) == request.resource.data.get('disponible', null)
+        && existsAfter(membershipPath)
+        && getAfter(membershipPath).data.get('disponible', null) == request.resource.data.get('disponible', null);
+    }
+
+    function hondurasTimestamp(instant) {
+      return instant - duration.value(6, 'h');
+    }
+
+    function bookingBlockCount(booking) {
+      let durationMin = booking.get('duracionMin', 0);
+      return durationMin is int ? int((durationMin + 14) / 15) : 0;
+    }
+
+    function bookingStartBlockOffset(booking) {
+      let start = booking.get('inicio', request.time);
+      let localStart = hondurasTimestamp(start);
+      let firstBlock = int(start.toMillis() / 900000);
+      let dayStartBlock = int((localStart.date().toMillis() + 21600000) / 900000);
+      return firstBlock - dayStartBlock;
+    }
+
+    function partitionFirstOffset(booking, partition) {
+      let startOffset = bookingStartBlockOffset(booking);
+      let partitionStart = partition * 4;
+      return partitionStart > startOffset ? partitionStart - startOffset : 0;
+    }
+
+    function partitionExpectedCount(booking, partition) {
+      let startOffset = bookingStartBlockOffset(booking);
+      let blockCount = bookingBlockCount(booking);
+      let partitionStart = partition * 4;
+      let partitionEnd = partitionStart + 4;
+      let bookingEnd = startOffset + blockCount;
+      let overlapStart = partitionStart > startOffset ? partitionStart : startOffset;
+      let overlapEnd = partitionEnd < bookingEnd ? partitionEnd : bookingEnd;
+      return overlapEnd > overlapStart ? overlapEnd - overlapStart : 0;
+    }
+
+    function partitionFirstBlock(booking, partition) {
+      return int(booking.get('inicio', request.time).toMillis() / 900000)
+        + partitionFirstOffset(booking, partition);
+    }
+
+    function partitionEntryMatches(occupancy, firstBlock, expectedCount, index) {
+      return index >= expectedCount
+        || occupancy.get(string(firstBlock + index), null) == true;
+    }
+
+    function allPartitionEntriesMatch(occupancy, firstBlock, expectedCount) {
+      return partitionEntryMatches(occupancy, firstBlock, expectedCount, 0)
+        && partitionEntryMatches(occupancy, firstBlock, expectedCount, 1)
+        && partitionEntryMatches(occupancy, firstBlock, expectedCount, 2)
+        && partitionEntryMatches(occupancy, firstBlock, expectedCount, 3);
+    }
+
+    function partitionAdditionMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, index) {
+      let key = string(firstBlock + index);
+      return index >= expectedCount
+        || (beforeBlocks.get(key, null) == null && afterBlocks.get(key, null) == true);
+    }
+
+    function allPartitionAdditionsMatch(beforeBlocks, afterBlocks, firstBlock, expectedCount) {
+      return partitionAdditionMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 0)
+        && partitionAdditionMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 1)
+        && partitionAdditionMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 2)
+        && partitionAdditionMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 3);
+    }
+
+    function partitionRemovalMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, index) {
+      let key = string(firstBlock + index);
+      return index >= expectedCount
+        || (beforeBlocks.get(key, null) == true && afterBlocks.get(key, null) == null);
+    }
+
+    function allPartitionRemovalsMatch(beforeBlocks, afterBlocks, firstBlock, expectedCount) {
+      return partitionRemovalMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 0)
+        && partitionRemovalMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 1)
+        && partitionRemovalMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 2)
+        && partitionRemovalMatches(beforeBlocks, afterBlocks, firstBlock, expectedCount, 3);
+    }
+
+    function validAppointmentBlockPartition(booking, occupancy, partition) {
+      let expectedCount = partitionExpectedCount(booking, partition);
+      let firstBlock = partitionFirstBlock(booking, partition);
+      return partition is int && partition >= 0 && partition <= 23
+        && expectedCount > 0 && expectedCount <= 4
+        && occupancy is map && occupancy.keys().size() == expectedCount
+        && allPartitionEntriesMatch(occupancy, firstBlock, expectedCount);
+    }
+
+    function validBlockAdditionPartition(booking, beforeBlocks, afterBlocks, partition) {
+      let expectedCount = partitionExpectedCount(booking, partition);
+      let firstBlock = partitionFirstBlock(booking, partition);
+      let changes = afterBlocks.diff(beforeBlocks);
+      return expectedCount > 0 && expectedCount <= 4
+        && changes.addedKeys().size() == expectedCount
+        && changes.changedKeys().size() == 0
+        && changes.removedKeys().size() == 0
+        && allPartitionAdditionsMatch(beforeBlocks, afterBlocks, firstBlock, expectedCount);
+    }
+
+    function validBlockRemovalPartition(booking, beforeBlocks, afterBlocks, partition) {
+      let expectedCount = partitionExpectedCount(booking, partition);
+      let firstBlock = partitionFirstBlock(booking, partition);
+      let changes = beforeBlocks.diff(afterBlocks);
+      return expectedCount > 0 && expectedCount <= 4
+        && changes.removedKeys().size() == expectedCount
+        && changes.addedKeys().size() == 0
+        && changes.changedKeys().size() == 0
+        && allPartitionRemovalsMatch(beforeBlocks, afterBlocks, firstBlock, expectedCount);
+    }
+
+    function validBreakAt(hours, index, startMinute, endMinute) {
+      let breaks = hours.get('recesosMin', []);
+      return breaks.size() <= index
+        || !(startMinute < breaks[index].get('finMin', 1440)
+            && endMinute > breaks[index].get('inicioMin', -1));
+    }
+
+    function validBusinessBreaks(hours, startMinute, endMinute) {
+      let breaks = hours.get('recesosMin', []);
+      return breaks is list && breaks.size() <= 4
+        && validBreakAt(hours, 0, startMinute, endMinute)
+        && validBreakAt(hours, 1, startMinute, endMinute)
+        && validBreakAt(hours, 2, startMinute, endMinute)
+        && validBreakAt(hours, 3, startMinute, endMinute);
+    }
+
+    function validCustomerBookingHours(hours, schedule, localStart, localEnd) {
+      let startMinute = localStart.hours() * 60 + localStart.minutes();
+      let endMinute = localEnd.hours() * 60 + localEnd.minutes();
+      return hours.get('activo', false) == true
+        && startMinute >= hours.get('aperturaMin', 0)
+        && endMinute <= hours.get('cierreMin', 0)
+        && validBusinessBreaks(hours, startMinute, endMinute)
+        && schedule.get('activo', false) == true
+        && startMinute >= schedule.get('inicioMin', 0)
+        && endMinute <= schedule.get('finMin', 0);
+    }
+
+    function validLockShape(data, bloqueoId, businessId, employeeUid, dateKey, partition) {
+      return data.keys().hasOnly([
+          'id', 'negocioId', 'empleadoUid', 'fechaLocal', 'fechaLocalKey', 'particion', 'bloques', 'ultimaCitaId', 'createdAt', 'updatedAt'
+        ])
+        && data.get('id', '') == bloqueoId
+        && data.get('negocioId', '') == businessId
+        && data.get('empleadoUid', '') == employeeUid
+        && data.get('fechaLocal', '') is string
+        && data.get('fechaLocalKey', -1) is int
+        && data.get('fechaLocalKey', -1) == dateKey
+        && data.get('particion', -1) == partition
+        && data.get('bloques', null) is map
+        && data.get('ultimaCitaId', '') is string
+        && data.get('createdAt', null) is timestamp
+        && data.get('updatedAt', null) == request.time;
+    }
+
+    function validCustomerLockCreate(bloqueoId, businessId) {
+      let data = request.resource.data;
+      let employeeUid = data.get('empleadoUid', '');
+      let citaId = data.get('ultimaCitaId', '');
+      let citaPath = /databases/$(database)/documents/citas/$(citaId);
+      let appointment = get(citaPath).data;
+      let blocks = data.get('bloques', {});
+      let fechaLocalKey = data.get('fechaLocalKey', -1);
+      let partition = data.get('particion', -1);
+      return signedIn()
+        && fechaLocalKey is int
+        && partition is int && partition >= 0 && partition <= 23
+        && bloqueoId == employeeUid + '_' + string(fechaLocalKey) + '_' + string(partition)
+        && validLockShape(data, bloqueoId, businessId, employeeUid, fechaLocalKey, partition)
+        && data.get('createdAt', null) == request.time
+        && appointment.get('estado', '') == 'preparando'
+        && appointment.get('clienteId', '') == request.auth.uid
+        && appointment.get('createdAt', null) is timestamp
+        && appointment.get('createdAt', null) <= request.time
+        && appointment.get('createdAt', null) > request.time - duration.value(5, 'm')
+        && appointment.get('negocioId', '') == businessId
+        && appointment.get('empleadoUid', '') == employeeUid
+        && appointment.get('fechaLocalKey', -1) == fechaLocalKey
+        && validAppointmentBlockPartition(appointment, blocks, partition);
+    }
+
+    function validCustomerLockUpdate(bloqueoId, businessId) {
+      let data = request.resource.data;
+      let employeeUid = data.get('empleadoUid', '');
+      let citaId = data.get('ultimaCitaId', '');
+      let citaPath = /databases/$(database)/documents/citas/$(citaId);
+      let appointment = get(citaPath).data;
+      let beforeBlocks = resource.data.get('bloques', {});
+      let afterBlocks = data.get('bloques', {});
+      let fechaLocalKey = data.get('fechaLocalKey', -1);
+      let partition = data.get('particion', -1);
+      return signedIn()
+        && data.diff(resource.data).affectedKeys().hasOnly(['bloques', 'ultimaCitaId', 'updatedAt'])
+        && data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && fechaLocalKey is int
+        && partition is int && partition >= 0 && partition <= 23
+        && bloqueoId == employeeUid + '_' + string(fechaLocalKey) + '_' + string(partition)
+        && validLockShape(data, bloqueoId, businessId, employeeUid, fechaLocalKey, partition)
+        && appointment.get('estado', '') == 'preparando'
+        && appointment.get('clienteId', '') == request.auth.uid
+        && appointment.get('createdAt', null) is timestamp
+        && appointment.get('createdAt', null) <= request.time
+        && appointment.get('createdAt', null) > request.time - duration.value(5, 'm')
+        && appointment.get('negocioId', '') == businessId
+        && appointment.get('empleadoUid', '') == employeeUid
+        && appointment.get('fechaLocalKey', -1) == fechaLocalKey
+        && validBlockAdditionPartition(appointment, beforeBlocks, afterBlocks, partition);
+    }
+
+    function validCustomerLockRelease(bloqueoId, businessId) {
+      let data = request.resource.data;
+      let employeeUid = resource.data.get('empleadoUid', '');
+      let citaId = data.get('ultimaCitaId', '');
+      let citaPath = /databases/$(database)/documents/citas/$(citaId);
+      let appointment = getAfter(citaPath).data;
+      let fechaLocalKey = resource.data.get('fechaLocalKey', -1);
+      let partition = resource.data.get('particion', -1);
+      let beforeBlocks = resource.data.get('bloques', {});
+      let afterBlocks = data.get('bloques', {});
+      return signedIn()
+        && data.diff(resource.data).affectedKeys().hasOnly(['bloques', 'ultimaCitaId', 'updatedAt'])
+        && data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && fechaLocalKey is int
+        && partition is int && partition >= 0 && partition <= 23
+        && bloqueoId == employeeUid + '_' + string(fechaLocalKey) + '_' + string(partition)
+        && validLockShape(data, bloqueoId, businessId, employeeUid, fechaLocalKey, partition)
+        && appointment.get('estado', '') == 'rechazada'
+        && appointment.get('decisionPor', '') == request.auth.uid
+        && appointment.get('negocioId', '') == businessId
+        && appointment.get('empleadoUid', '') == employeeUid
+        && appointment.get('fechaLocalKey', -1) == fechaLocalKey
+        && (isAdmin() || (isEmployee() && employeeUid == request.auth.uid))
+        && validBlockRemovalPartition(appointment, beforeBlocks, afterBlocks, partition);
+    }
+
+    function validSparkBookingProfile(booking) {
+      let uid = request.auth.uid;
+      let userRef = userPath(uid);
+      let legacyRef = legacyUserPath(uid);
+      let hasUser = exists(userRef);
+      let clientProfile = hasUser ? get(userRef).data : get(legacyRef).data;
+      let role = clientProfile.get('role', '');
+      let rol = clientProfile.get('rol', '');
+      return role in ['', 'cliente', 'customer', 'client']
+        && rol in ['', 'cliente', 'customer', 'client']
+        && (role != '' || rol != '')
+        && booking.get('clienteId', '') == uid
+        && booking.get('clienteEmail', '') == request.auth.token.email;
+    }
+
+    function validSparkBookingDetails(booking, businessId, employeeUid) {
+      let business = get(businessPath(businessId)).data;
+      let serviceRef = /databases/$(database)/documents/negocios/$(businessId)/servicios/$(booking.get('servicioId', ''));
+      let serviceData = get(serviceRef).data;
+      let employee = get(publicEmployeePath(businessId, employeeUid)).data;
+      let durationMin = serviceData.get('duracionMin', -1);
+      return business.get('activo', false) == true
+        && business.get('reservasSparkPreparadas', false) == true
+        && business.get('modoNegocio', '') in ['unipersonal', 'multiEmpleado']
+        && serviceData.get('activo', false) == true
+        && durationMin is int && durationMin >= 5 && durationMin <= 480
+        && booking.get('duracionMin', -1) == durationMin
+        && serviceData.get('precio', null) is number
+        && serviceData.get('precio', -1) >= 0
+        && booking.get('precio', -1) == serviceData.get('precio', -2)
+        && employee.get('negocioId', '') == businessId
+        && publicEmployee(employee);
+    }
+
+    function validSparkBookingTime(booking, businessId, employeeUid) {
+      let localStart = hondurasTimestamp(booking.get('inicio', request.time));
+      let localEnd = hondurasTimestamp(booking.get('fin', request.time));
+      let fechaLocalKey = localStart.date().toMillis();
+      let dayId = string(localStart.dayOfWeek());
+      let hoursRef = /databases/$(database)/documents/negocios/$(businessId)/horarios/$(dayId);
+      let scheduleRef = /databases/$(database)/documents/negocios/$(businessId)/empleados/$(employeeUid)/disponibilidad/$(dayId);
+      let hours = get(hoursRef).data;
+      let schedule = get(scheduleRef).data;
+      return booking.get('inicio', request.time) > request.time
+        && booking.get('inicio', request.time).toMillis() % 900000 == 0
+        && booking.get('inicio', request.time).nanos() == 0 && booking.get('fin', request.time).nanos() == 0
+        && booking.get('fin', request.time).toMillis() - booking.get('inicio', request.time).toMillis() == booking.get('duracionMin', 0) * 60000
+        && booking.get('fechaLocalKey', -1) == fechaLocalKey
+        && localEnd.date().toMillis() == fechaLocalKey
+        && validCustomerBookingHours(hours, schedule, localStart, localEnd);
+    }
+
+    function validSparkBookingCommitGate(businessId, employeeUid) {
+      let business = get(businessPath(businessId)).data;
+      let employee = get(publicEmployeePath(businessId, employeeUid)).data;
+      return business.get('activo', false) == true
+        && business.get('reservasSparkPreparadas', false) == true
+        && employee.get('negocioId', '') == businessId
+        && publicEmployee(employee);
+    }
+
+    function validSparkBookingCommitTime(booking, businessId, employeeUid) {
+      let localStart = hondurasTimestamp(booking.get('inicio', request.time));
+      let localEnd = hondurasTimestamp(booking.get('fin', request.time));
+      let dayId = string(localStart.dayOfWeek());
+      let hoursRef = /databases/$(database)/documents/negocios/$(businessId)/horarios/$(dayId);
+      let scheduleRef = /databases/$(database)/documents/negocios/$(businessId)/empleados/$(employeeUid)/disponibilidad/$(dayId);
+      let hours = get(hoursRef).data;
+      let schedule = get(scheduleRef).data;
+      return booking.get('inicio', request.time) > request.time
+        && validCustomerBookingHours(hours, schedule, localStart, localEnd);
+    }
+
+    function validBookingPartitionAfter(booking, citaId, businessId, employeeUid, partition) {
+      let dateKey = booking.get('fechaLocalKey', -1);
+      let bloqueoId = employeeUid + '_' + string(dateKey) + '_' + string(partition);
+      let lockRef = /databases/$(database)/documents/negocios/$(businessId)/bloqueosCitas/$(bloqueoId);
+      let lockAfter = getAfter(lockRef).data;
+      return lockAfter.get('ultimaCitaId', '') == citaId
+        && lockAfter.get('updatedAt', null) == request.time;
+    }
+
+    function validSparkBookingLock(booking, citaId, businessId, employeeUid) {
+      let startOffset = bookingStartBlockOffset(booking);
+      let blockCount = bookingBlockCount(booking);
+      let startPartition = int(startOffset / 4);
+      let endPartition = int((startOffset + blockCount - 1) / 4);
+      return validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition)
+        && (endPartition <= startPartition
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 1))
+        && (endPartition <= startPartition + 1
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 2))
+        && (endPartition <= startPartition + 2
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 3))
+        && (endPartition <= startPartition + 3
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 4))
+        && (endPartition <= startPartition + 4
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 5))
+        && (endPartition <= startPartition + 5
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 6))
+        && (endPartition <= startPartition + 6
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 7))
+        && (endPartition <= startPartition + 7
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 8));
+    }
+
+    function validSparkBookingDraftCreate(citaId) {
+      let booking = request.resource.data;
+      let businessId = booking.get('negocioId', '');
+      let employeeUid = booking.get('empleadoUid', '');
+      return signedIn()
+        && businessId is string && businessId.size() > 0
+        && employeeUid is string && employeeUid.size() > 0
+        && booking.keys().hasOnly([
+          'negocioId', 'negocioNombre', 'clienteId', 'clienteEmail', 'clienteNombre', 'clienteTelefono',
+          'servicioId', 'servicioNombre', 'precio', 'duracionMin', 'inicio', 'fin', 'fechaLocal',
+          'empleadoId', 'empleadoUid', 'empleadoNombre', 'empleadoCodigo', 'modoNegocio', 'estado',
+          'createdAt', 'updatedAt', 'notas', 'fechaLocalKey'
+        ])
+        && booking.get('estado', '') == 'preparando'
+        && booking.get('inicio', null) is timestamp
+        && booking.get('fin', null) is timestamp
+        && (!booking.keys().hasAny(['notas']) || (booking.get('notas', '') is string && booking.get('notas', '').size() <= 500))
+        && booking.get('createdAt', null) == request.time
+        && booking.get('updatedAt', null) == request.time
+        && validSparkBookingProfile(booking)
+        && validSparkBookingDetails(booking, businessId, employeeUid)
+        && validSparkBookingTime(booking, businessId, employeeUid);
+    }
+
+    function validSparkBookingCommit(citaId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let businessId = before.get('negocioId', '');
+      let employeeUid = before.get('empleadoUid', '');
+      return signedIn()
+        && before.get('estado', '') == 'preparando'
+        && after.get('estado', '') == 'pendiente_de_aprobacion'
+        && before.get('clienteId', '') == request.auth.uid
+        && after.diff(before).affectedKeys().hasOnly(['estado', 'updatedAt'])
+        && after.get('updatedAt', null) == request.time
+        && before.get('createdAt', null) is timestamp
+        && before.get('createdAt', null) > request.time - duration.value(5, 'm')
+        && validSparkBookingCommitGate(businessId, employeeUid)
+        && validSparkBookingCommitTime(before, businessId, employeeUid)
+        && validSparkBookingLock(before, citaId, businessId, employeeUid);
+    }
+
+    function validAppointmentReleasePartitions(booking, citaId, businessId, employeeUid) {
+      let startOffset = bookingStartBlockOffset(booking);
+      let blockCount = bookingBlockCount(booking);
+      let startPartition = int(startOffset / 4);
+      let endPartition = int((startOffset + blockCount - 1) / 4);
+      return blockCount > 0 && blockCount <= 32
+        && validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition)
+        && (endPartition <= startPartition
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 1))
+        && (endPartition <= startPartition + 1
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 2))
+        && (endPartition <= startPartition + 2
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 3))
+        && (endPartition <= startPartition + 3
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 4))
+        && (endPartition <= startPartition + 4
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 5))
+        && (endPartition <= startPartition + 5
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 6))
+        && (endPartition <= startPartition + 6
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 7))
+        && (endPartition <= startPartition + 7
+          || validBookingPartitionAfter(booking, citaId, businessId, employeeUid, startPartition + 8));
+    }
+
+    function validSparkAppointmentDecisionUpdate(citaId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let nextState = after.get('estado', '');
+      let assigned = before.get('empleadoUid', '') == request.auth.uid
+        || before.get('empleadoId', '') == request.auth.uid;
+      let businessId = before.get('negocioId', '');
+      let employeeUid = before.get('empleadoUid', '');
+      return signedIn()
+        && before.get('estado', '') == 'pendiente_de_aprobacion'
+        && nextState in ['confirmada', 'rechazada']
+        && after.diff(before).affectedKeys().hasOnly(['estado', 'decisionPor', 'decisionAt', 'updatedAt'])
+        && after.get('decisionPor', '') == request.auth.uid
+        && after.get('decisionAt', null) == request.time
+        && after.get('updatedAt', null) == request.time
+        && (isAdmin() || (isEmployee() && assigned))
+        && (nextState != 'confirmada'
+          || (validSparkBookingCommitGate(businessId, employeeUid)
+            && validSparkBookingCommitTime(before, businessId, employeeUid)))
+        && (nextState != 'rechazada'
+          || validAppointmentReleasePartitions(before, citaId, businessId, employeeUid));
+    }
+
+    function validSparkServiceTransition() {
+      let before = resource.data;
+      let after = request.resource.data;
+      let assigned = before.get('empleadoUid', '') == request.auth.uid
+        || before.get('empleadoId', '') == request.auth.uid;
+      let start = before.get('estado', '') == 'confirmada'
+        && after.get('estado', '') == 'en_curso'
+        && after.diff(before).affectedKeys().hasOnly(['estado', 'startedAt', 'iniciadoPor', 'updatedAt'])
+        && after.get('startedAt', null) == request.time
+        && after.get('iniciadoPor', '') == request.auth.uid;
+      let finish = before.get('estado', '') == 'en_curso'
+        && after.get('estado', '') == 'finalizada'
+        && after.diff(before).affectedKeys().hasOnly(['estado', 'completedAt', 'finalizadoPor', 'duracionRealMin', 'updatedAt'])
+        && after.get('completedAt', null) == request.time
+        && after.get('finalizadoPor', '') == request.auth.uid
+        && after.get('duracionRealMin', 0) is number
+        && after.get('duracionRealMin', 0) > 0
+        && after.get('duracionRealMin', 0) <= 10080;
+      return signedIn()
+        && isEmployee()
+        && assigned
+        && after.get('updatedAt', null) == request.time
+        && (start || finish);
+    }
+
+    function validWhatsAppReminderCreate(data, reminderId) {
+      let status = data.get('estado', '');
+      let initialStatusTime = status == 'preparado'
+        ? data.get('preparadoAt', null) == request.time
+        : status == 'omitido' && data.get('omitidoAt', null) == request.time;
+      return isAdmin()
+        && data.keys().hasOnly([
+          'id', 'negocioId', 'clienteId', 'tipo', 'fechaProgramada', 'clienteNombre',
+          'clienteTelefono', 'citaId', 'servicioId', 'servicioNombre', 'citaFecha',
+          'citaHoraInicio', 'anticipacionRecordatorioDias', 'aniversarioAno', 'estado',
+          'createdAt', 'updatedAt', 'actualizadoPorUid', 'preparadoAt', 'enviadoAt', 'omitidoAt'
+        ])
+        && data.keys().hasAll([
+          'id', 'negocioId', 'clienteId', 'tipo', 'fechaProgramada', 'clienteNombre',
+          'clienteTelefono', 'estado', 'createdAt', 'updatedAt', 'actualizadoPorUid'
+        ])
+        && data.get('id', '') == reminderId
+        && data.get('negocioId', '') is string && data.get('negocioId', '').size() > 0 && data.get('negocioId', '').size() <= 128
+        && data.get('clienteId', '') is string && data.get('clienteId', '').size() > 0 && data.get('clienteId', '').size() <= 128
+        && data.get('tipo', '') in ['cita', 'regreso', 'cumpleanos']
+        && data.get('estado', '') in ['preparado', 'omitido']
+        && data.get('fechaProgramada', null) is timestamp
+        && data.get('clienteNombre', '') is string && data.get('clienteNombre', '').size() <= 100
+        && data.get('clienteTelefono', '') is string && data.get('clienteTelefono', '').size() <= 32
+        && (!data.keys().hasAny(['citaId']) || (data.get('citaId', '') is string && data.get('citaId', '').size() <= 128))
+        && (!data.keys().hasAny(['servicioId']) || (data.get('servicioId', '') is string && data.get('servicioId', '').size() <= 128))
+        && (!data.keys().hasAny(['servicioNombre']) || (data.get('servicioNombre', '') is string && data.get('servicioNombre', '').size() <= 100))
+        && (!data.keys().hasAny(['citaFecha']) || (data.get('citaFecha', '') is string && data.get('citaFecha', '').size() <= 100))
+        && (!data.keys().hasAny(['citaHoraInicio']) || (data.get('citaHoraInicio', '') is string && data.get('citaHoraInicio', '').size() <= 32))
+        && (!data.keys().hasAny(['anticipacionRecordatorioDias'])
+          || (data.get('anticipacionRecordatorioDias', -1) is int && data.get('anticipacionRecordatorioDias', -1) >= 0 && data.get('anticipacionRecordatorioDias', -1) <= 365))
+        && (!data.keys().hasAny(['aniversarioAno'])
+          || (data.get('aniversarioAno', 0) is int && data.get('aniversarioAno', 0) >= 2000 && data.get('aniversarioAno', 0) <= 9999))
+        && data.get('actualizadoPorUid', '') == request.auth.uid
+        && data.get('createdAt', null) == request.time
+        && data.get('updatedAt', null) == request.time
+        && initialStatusTime;
+    }
+
+    function validWhatsAppReminderUpdate(reminderId) {
+      let before = resource.data;
+      let after = request.resource.data;
+      let nextStatus = after.get('estado', '');
+      let statusTransition = (before.get('estado', '') in ['pendiente', 'preparado'] && nextStatus == 'preparado'
+          && after.get('preparadoAt', null) == request.time)
+        || (before.get('estado', '') == 'preparado' && nextStatus == 'enviado'
+          && after.get('enviadoAt', null) == request.time)
+        || (before.get('estado', '') in ['pendiente', 'preparado'] && nextStatus == 'omitido'
+          && after.get('omitidoAt', null) == request.time);
+      return isAdmin()
+        && after.get('id', '') == reminderId
+        && after.get('negocioId', '') == before.get('negocioId', '')
+        && after.get('clienteId', '') == before.get('clienteId', '')
+        && after.get('tipo', '') == before.get('tipo', '')
+        && after.diff(before).affectedKeys().hasOnly([
+          'estado', 'updatedAt', 'actualizadoPorUid', 'preparadoAt', 'enviadoAt', 'omitidoAt'
+        ])
+        && after.get('updatedAt', null) == request.time
+        && after.get('actualizadoPorUid', '') == request.auth.uid
+        && statusTransition;
+    }
+
+    function validAppointmentNotification(data, notifId) {
+      let citaId = data.get('citaId', '');
+      let citaPath = /databases/$(database)/documents/citas/$(citaId);
+      let appointment = getAfter(citaPath).data;
+      let state = appointment.get('estado', '');
+      let type = data.get('tipo', '');
+      let recipient = data.get('destinatarioId', '');
+      let appointmentCreatedAt = appointment.get('createdAt', null);
+      let recentBooking = appointmentCreatedAt is timestamp
+        && appointmentCreatedAt <= request.time
+        && appointmentCreatedAt > request.time - duration.value(1, 'h');
+      let newBooking = state == 'pendiente_de_aprobacion'
+        && recentBooking
+        && request.auth.uid == appointment.get('clienteId', '')
+        && type == 'nueva_solicitud_cita'
+        && recipient in [appointment.get('clienteId', ''), appointment.get('empleadoUid', ''), 'admin']
+        && ((recipient == appointment.get('clienteId', '') && notifId == citaId + '-client')
+          || (recipient == appointment.get('empleadoUid', '') && notifId == citaId + '-employee')
+          || (recipient == 'admin' && notifId == citaId + '-admin'));
+      let decision = state in ['confirmada', 'rechazada']
+        && appointment.get('decisionAt', null) == request.time
+        && appointment.get('decisionPor', '') == request.auth.uid
+        && recipient == appointment.get('clienteId', '')
+        && type in ['cita_confirmada', 'cita_rechazada'];
+      let serviceEvent = state in ['en_curso', 'finalizada']
+        && appointment.get('updatedAt', null) == request.time
+        && (appointment.get('iniciadoPor', '') == request.auth.uid || appointment.get('finalizadoPor', '') == request.auth.uid)
+        && recipient in [appointment.get('clienteId', ''), 'admin']
+        && type in ['servicio_iniciado', 'servicio_finalizado'];
+      return signedIn()
+        && data.keys().hasOnly(['destinatarioId', 'tipo', 'titulo', 'cuerpo', 'citaId', 'negocioId', 'createdAt', 'leida'])
+        && data.keys().hasAll(['destinatarioId', 'tipo', 'titulo', 'cuerpo', 'citaId', 'negocioId', 'createdAt', 'leida'])
+        && recipient is string && recipient.size() > 0
+        && data.get('titulo', '') is string && data.get('titulo', '').size() <= 120
+        && data.get('cuerpo', '') is string && data.get('cuerpo', '').size() <= 500
+        && data.get('negocioId', '') == appointment.get('negocioId', '')
+        && data.get('createdAt', null) == request.time
+        && data.get('leida', true) == false
+        && (newBooking || decision || serviceEvent);
+    }
+
     match /usuarios/{uid} {
       allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
       allow list: if isAdmin();
       allow create: if signedIn() && (request.auth.uid == uid
         ? (validCustomerProfile(request.resource.data, uid)
           && request.resource.data.createdAt == request.time)
-        : validAdminEmployeeProfileCreate(uid));
+        : (validAdminEmployeeProfileCreate(uid) || validAdminCustomerProfileCreate(uid)));
       allow update: if signedIn() && (request.auth.uid == uid
-        ? (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
-            'aceptaRecordatoriosWhatsApp'
-          ])
-          && validPhone(request.resource.data)
-          && validBirthday(request.resource.data)
-          && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
-            || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
-          && request.resource.data.id == resource.data.id
-          && request.resource.data.email == resource.data.email
-          && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
-          && request.resource.data.createdAt == resource.data.createdAt)
+        ? validOwnUserProfileUpdate()
         : validAdminEmployeeProfileUpdate(uid));
       allow delete: if false;
 
@@ -473,20 +1229,9 @@ service cloud.firestore {
       allow create: if signedIn() && (request.auth.uid == uid
         ? (validCustomerProfile(request.resource.data, uid)
           && request.resource.data.createdAt == request.time)
-        : validAdminEmployeeProfileCreate(uid));
+        : (validAdminEmployeeProfileCreate(uid) || validAdminCustomerProfileCreate(uid)));
       allow update: if signedIn() && (request.auth.uid == uid
-        ? (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
-            'aceptaRecordatoriosWhatsApp'
-          ])
-          && validPhone(request.resource.data)
-          && validBirthday(request.resource.data)
-          && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
-            || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
-          && request.resource.data.id == resource.data.id
-          && request.resource.data.email == resource.data.email
-          && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
-          && request.resource.data.createdAt == resource.data.createdAt)
+        ? validOwnUserProfileUpdate()
         : validAdminEmployeeProfileUpdate(uid));
       allow delete: if false;
     }
@@ -499,7 +1244,10 @@ service cloud.firestore {
         && validEmployeeRequest(request.resource.data, uid)
         && baseProfilesAfterAreClients(uid);
       allow update: if signedIn() && (request.auth.uid == uid
-        ? validOwnerEmployeeRequestRetry(uid)
+        ? (resource.data.get('estadoSolicitud', '') == 'rechazada'
+          ? validOwnerEmployeeRequestRetry(uid)
+          : (resource.data.get('estadoSolicitud', '') == 'aprobada'
+            && validOwnEmployeeAvailabilityUpdate(uid, resource.data.get('negocioId', ''))))
         : (request.resource.data.get('estadoSolicitud', '') == 'aprobada'
           ? validAdminEmployeeApproval(uid)
           : validAdminEmployeeRejection(uid)));
@@ -531,23 +1279,49 @@ service cloud.firestore {
 
       match /empleados/{empleadoId} {
         allow get, list: if isAdmin()
-          || (signedIn() && request.auth.uid == empleadoId)
-          || (signedIn() && publicEmployee(resource.data));
+          || (signedIn() && request.auth.uid == empleadoId && isEmployee());
         allow create: if isAdmin()
           && !exists(businessEmployeePath(negocioId, empleadoId))
           && validEmployeeMembership(request.resource.data, empleadoId, negocioId)
           && approvedEmployeeStateAfter(empleadoId, negocioId);
-        allow update, delete: if false;
+        allow update: if validOwnEmployeeMembershipAvailabilityUpdate(empleadoId, negocioId);
+        allow delete: if false;
 
         match /disponibilidad/{dia} {
           allow get, list: if isAdmin()
             || (isEmployee() && request.auth.uid == empleadoId)
             || (signedIn()
-              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('publica', false) == true
-              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('activo', false) == true
-              && get(/databases/$(database)/documents/negocios/$(negocioId)/empleados/$(empleadoId)).data.get('disponible', false) == true);
-          allow create, update, delete: if false;
+              && exists(publicEmployeePath(negocioId, empleadoId))
+              && publicEmployee(get(publicEmployeePath(negocioId, empleadoId)).data));
+          allow create, update: if activeOwnEmployeeBusiness(empleadoId, negocioId)
+            && dia in ['0', '1', '2', '3', '4', '5', '6']
+            && validAvailabilityScheduleDay(request.resource.data, dia);
+          allow delete: if false;
         }
+      }
+
+      match /empleadosPublicos/{empleadoId} {
+        allow get, list: if isAdmin()
+          || (signedIn() && request.auth.uid == empleadoId)
+          || (signedIn() && publicEmployee(resource.data));
+        allow create: if validPublicEmployeeCreate(request.resource.data, empleadoId, negocioId);
+        allow update: if validOwnPublicEmployeeAvailabilityUpdate(empleadoId, negocioId);
+        allow delete: if false;
+      }
+
+      match /bloqueosCitas/{bloqueoId} {
+        allow get, list: if canReadAppointmentLocks(negocioId);
+        allow create: if resource == null
+          && signedIn()
+          && (validCustomerLockCreate(bloqueoId, negocioId)
+            || (hasAdminRoleHint(request.auth.uid) && isAdmin()));
+        allow update: if resource != null
+          && signedIn()
+          && ((request.resource.data.get('bloques', {}).diff(resource.data.get('bloques', {})).removedKeys().size() > 0
+            ? validCustomerLockRelease(bloqueoId, negocioId)
+            : validCustomerLockUpdate(bloqueoId, negocioId))
+            || (hasAdminRoleHint(request.auth.uid) && isAdmin()));
+        allow delete: if isAdmin();
       }
 
       match /horarios/{horarioId} {
@@ -558,19 +1332,28 @@ service cloud.firestore {
 
     match /citas/{citaId} {
       allow get, list: if signedIn()
-        && (isAdmin()
-          || resource.data.get('clienteId', '') == request.auth.uid
+        && (resource.data.get('clienteId', '') == request.auth.uid
           || (isEmployee() && (resource.data.get('empleadoUid', '') == request.auth.uid
-            || resource.data.get('empleadoId', '') == request.auth.uid)));
-      allow create, update, delete: if false;
+            || resource.data.get('empleadoId', '') == request.auth.uid))
+          || isAdmin());
+      allow create: if resource == null && validSparkBookingDraftCreate(citaId);
+      allow update: if resource != null && (validSparkBookingCommit(citaId)
+        || validSparkAppointmentDecisionUpdate(citaId) || validSparkServiceTransition());
+      allow delete: if resource != null && resource.data.get('estado', '') == 'preparando'
+        && resource.data.get('clienteId', '') == request.auth.uid;
     }
 
     match /notificaciones/{notifId} {
       allow get, list: if signedIn()
         && (resource.data.get('destinatarioId', '') == request.auth.uid || isAdmin());
-      allow create: if validEmployeeDecisionNotification(request.resource.data);
+      allow create: if request.resource.data.get('tipo', '') in [
+          'nueva_solicitud_cita', 'cita_confirmada', 'cita_rechazada', 'servicio_iniciado', 'servicio_finalizado'
+        ]
+        ? validAppointmentNotification(request.resource.data, notifId)
+        : validEmployeeDecisionNotification(request.resource.data);
       allow update: if signedIn()
-        && resource.data.get('destinatarioId', '') == request.auth.uid
+        && (resource.data.get('destinatarioId', '') == request.auth.uid
+          || (resource.data.get('destinatarioId', '') == 'admin' && isAdmin()))
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida'])
         && request.resource.data.leida is bool;
       allow delete: if false;
@@ -578,7 +1361,9 @@ service cloud.firestore {
 
     match /recordatoriosWhatsApp/{recordatorioId} {
       allow get, list: if isAdmin();
-      allow create, update, delete: if false;
+      allow create: if validWhatsAppReminderCreate(request.resource.data, recordatorioId);
+      allow update: if validWhatsAppReminderUpdate(recordatorioId);
+      allow delete: if false;
     }
   }
 }

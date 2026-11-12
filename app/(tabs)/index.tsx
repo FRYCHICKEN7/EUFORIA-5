@@ -8,6 +8,7 @@ import { BRAND } from "@/constants/brand";
 import { ScreenContainer } from "@/components/screen-container";
 import { useAuthSession } from "@/lib/auth-session";
 import { appointmentMillis, appointmentStatusLabel, subscribeAdminAppointments, type AppointmentRecord } from "@/lib/appointments";
+import { isCompletedAppointmentStatus } from "@/lib/appointment-status";
 import { formatCurrency } from "@/lib/formatCurrency";
 import { hasProfileRole } from "@/lib/roles";
 import { useThemeContext } from "@/lib/theme-provider";
@@ -58,10 +59,10 @@ function SummaryContent() {
     .filter((item) => appointmentMillis(item.inicio) !== null && (appointmentMillis(item.inicio) as number) >= now && !["cancelada", "rechazada", "expirada"].includes(item.estado))
     .sort((a, b) => (appointmentMillis(a.inicio) ?? 0) - (appointmentMillis(b.inicio) ?? 0)), [appointments, now]);
   const pendingCount = appointments.filter((item) => ["hold", "pendiente_de_aprobacion"].includes(item.estado)).length;
-  const completedRevenue = appointments.filter((item) => item.estado === "completada").reduce((total, item) => total + (Number(item.precio) || 0), 0);
+  const completedRevenue = appointments.filter((item) => isCompletedAppointmentStatus(item.estado)).reduce((total, item) => total + (Number(item.precio) || 0), 0);
   const performance = useMemo(() => {
     const groups = new Map<string, { employee: string; service: string; count: number; actualTotal: number; estimated: number }>();
-    appointments.filter((item) => item.estado === "completada" && Number(item.duracionRealMin) > 0).forEach((item) => {
+    appointments.filter((item) => isCompletedAppointmentStatus(item.estado) && Number(item.duracionRealMin) > 0).forEach((item) => {
       const key = `${item.empleadoUid ?? item.empleadoId ?? item.empleadoNombre ?? "sin-empleado"}:${item.servicioId}`;
       const row = groups.get(key) ?? { employee: String(item.empleadoNombre ?? "Empleado"), service: String(item.servicioNombre ?? "Servicio"), count: 0, actualTotal: 0, estimated: Number(item.duracionMin) || 0 };
       row.count += 1;

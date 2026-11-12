@@ -1,6 +1,5 @@
 import { getApp, getApps, initializeApp, type FirebaseApp } from "firebase/app";
 import { getFirestore, initializeFirestore, persistentLocalCache, type Firestore } from "firebase/firestore";
-import { getFunctions, type Functions } from "firebase/functions";
 import { createFirebaseAuth } from "./firebase-auth-adapter";
 import type { Auth } from "firebase/auth";
 
@@ -28,14 +27,13 @@ export let firebaseConfigured = false;
 export let firebaseApp: FirebaseApp | null = null;
 export let firebaseAuth: Auth | null = null;
 export let db: Firestore | null = null;
-export let functions: Functions | null = null;
 
 function isComplete(config: FirebasePublicConfig) {
   return Boolean(config.apiKey && config.authDomain && config.projectId && config.appId);
 }
 
 export async function ensureFirebaseConfigured(): Promise<boolean> {
-  if (firebaseConfigured && firebaseApp && firebaseAuth && db && functions) return true;
+  if (firebaseConfigured && firebaseApp && firebaseAuth && db) return true;
   if (!isComplete(firebaseConfig)) return false;
 
   try {
@@ -46,7 +44,6 @@ export async function ensureFirebaseConfigured(): Promise<boolean> {
     } catch {
       db = getFirestore(firebaseApp);
     }
-    functions = getFunctions(firebaseApp, "us-central1");
     firebaseConfigured = true;
     return true;
   } catch (error) {
