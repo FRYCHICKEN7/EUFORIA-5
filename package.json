@@ -34,7 +34,6 @@
     "drizzle-orm": "^0.44.7",
     "expo": "~57.0.24",
     "expo-asset": "~57.0.18",
-    "expo-audio": "~57.0.5",
     "expo-build-properties": "~57.0.21",
     "expo-constants": "~57.0.19",
     "expo-file-system": "~57.0.7",

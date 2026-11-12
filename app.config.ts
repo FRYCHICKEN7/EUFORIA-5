@@ -116,12 +116,6 @@ const config: ExpoConfig & { logoUrl: string } = {
     "expo-router",
     ["expo-local-authentication", { faceIDPermission: "EUFORIA usa Face ID para desbloquear de forma segura tu sesión guardada." }],
     [
-      "expo-audio",
-      {
-        microphonePermission: "Allow $(PRODUCT_NAME) to access your microphone.",
-      },
-    ],
-    [
       "expo-video",
       {
         supportsBackgroundPlayback: true,
