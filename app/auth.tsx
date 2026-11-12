@@ -31,12 +31,8 @@ function getAuthErrorMessage(error: unknown) {
 
 function getEmployeeRequestErrorMessage(error: unknown) {
   const code = (error as { code?: string })?.code ?? "";
-  if (code.includes("functions/not-found") || code.includes("functions/unavailable") || code.includes("functions/deadline-exceeded")) {
-    return "Tu cuenta ya está creada, pero la solicitud no se envió. No vuelvas a registrarte. Pide a administración que actualice el sistema del salón y luego inicia sesión con este mismo correo como empleado.";
-  }
-  if (code.includes("functions/permission-denied") || code.includes("functions/failed-precondition")) {
-    return "Tu cuenta ya está creada, pero la solicitud no se envió. Pide a administración que revise el acceso al equipo. Cuando esté corregido, inicia sesión con este mismo correo como empleado; no vuelvas a registrarte.";
-  }
+  if (code.includes("permission-denied")) return "Tu cuenta ya está creada, pero no pudimos enviar la solicitud. Pide a administración que revise el acceso y luego inténtalo con este mismo correo.";
+  if (code.includes("unavailable") || code.includes("network-request-failed")) return "Tu cuenta ya está creada, pero no pudimos enviar la solicitud por falta de conexión. Inicia sesión con este mismo correo como empleado para volver a intentarlo.";
   return "Tu cuenta ya está creada, pero la solicitud no se envió. Inicia sesión con este mismo correo como empleado para volver a intentarlo; no vuelvas a registrarte.";
 }
 

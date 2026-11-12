@@ -6,13 +6,10 @@ import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { onSchedule } from "firebase-functions/v2/scheduler";
 export {
   actualizarRecordatorioWhatsApp,
-  aprobarSolicitudEmpleado,
   cancelarRecordatoriosWhatsAppExcluidos,
   cancelarRecordatoriosWhatsAppExcluidosLegacy,
   guardarConfiguracionRecordatoriosWhatsApp,
   prepararRecordatoriosCumpleanos,
-  rechazarSolicitudEmpleado,
-  solicitarPerfilEmpleado,
   sincronizarRecordatoriosCitas,
   sincronizarRecordatoriosServicios,
 } from "./reminders";
@@ -38,7 +35,6 @@ const PROFILE_COLLECTIONS = ["users", "empleados", "usuarios"] as const;
 type ReserveInput = { negocioId: string; servicioId: string; inicio: string; empleadoId: string; notas?: string };
 type DecisionInput = { citaId: string; notas?: string };
 type AvailabilityRequest = { negocioId: string; servicioId: string; fecha: string };
-type PromoteEmployeeInput = { uid: string; negocioId: string; Empleado: string };
 type EmployeeAvailabilityInput = {
   disponible: boolean;
   dias: Array<{ dia: number; activo: boolean; inicio?: string; fin?: string }>;
@@ -245,44 +241,6 @@ function publicEmployeeQuery(businessRef: FirebaseFirestore.DocumentReference) {
     .where("disponible", "==", true)
     .limit(100);
 }
-
-export const prepararNegocioInicial = onCall(async (request) => {
-  const adminUid = request.auth?.uid;
-  if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión para continuar.");
-  const newBusinessRef = db.collection("negocios").doc();
-  const now = Timestamp.now();
-
-  return db.runTransaction(async (transaction) => {
-    const [admin, activeBusinesses] = await Promise.all([
-      loadProfileInTransaction(transaction, adminUid),
-      transaction.get(db.collection("negocios").where("activo", "==", true).limit(1)),
-    ]);
-    if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "No tienes autorización para esta acción.");
-    const activeBusiness = activeBusinesses.docs[0];
-    if (activeBusiness) {
-      const data = activeBusiness.data();
-      return { ok: true as const, created: false, businessId: activeBusiness.id, nombre: String(data.nombre ?? data.nombreNegocio ?? "EUFORIA Beauty Studio") };
-    }
-
-    transaction.create(newBusinessRef, {
-      nombre: "EUFORIA Beauty Studio",
-      activo: true,
-      modoNegocio: "multiEmpleado",
-      createdAt: now,
-      updatedAt: now,
-    });
-    return { ok: true as const, created: true, businessId: newBusinessRef.id, nombre: "EUFORIA Beauty Studio" };
-  });
-});
-
-export const crearPerfilEmpleado = onCall<PromoteEmployeeInput>(async (request) => {
-  const adminUid = request.auth?.uid;
-  if (!adminUid) throw new HttpsError("unauthenticated", "Inicia sesión como administrador.");
-  const admin = await loadProfile(adminUid);
-  if (!admin.profile || admin.role !== "admin") throw new HttpsError("permission-denied", "Solo administración puede revisar solicitudes.");
-  // Keep the old callable name deployed, but never allow it to create or promote an employee.
-  throw new HttpsError("failed-precondition", "La persona debe registrarse como empleado; administración solo puede aceptar o rechazar su solicitud.");
-});
 
 export const guardarDisponibilidadEmpleado = onCall<EmployeeAvailabilityInput>(async (request) => {
   const uid = request.auth?.uid;

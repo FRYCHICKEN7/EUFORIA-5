@@ -1,6 +1,6 @@
 # EUFORIA Beauty Studio
 
-Aplicación móvil Expo Router / React Native / TypeScript para clientes, empleados y administración del salón en Honduras. Firebase Authentication valida correo y contraseña; Firestore conserva perfiles y datos de negocio, y Cloud Functions protegen reservas, cambios de roles y cronometraje.
+Aplicación móvil Expo Router / React Native / TypeScript para clientes, empleados y administración del salón en Honduras. Firebase Authentication valida correo y contraseña; Firestore conserva perfiles y datos del negocio. La migración aprobada al plan gratuito se realiza por fases: el registro, aceptación y rechazo de empleados ya se hacen desde la app con Firestore y reglas de seguridad; las citas, cuentas cliente provisionales, recordatorios y avisos automáticos aún conservan operaciones anteriores que se migrarán en las fases 2 y 3.
 
 ## Estado y límites de esta entrega
 
@@ -10,7 +10,7 @@ En el tema rosado oscuro, la marca EUFORIA y los encabezados sobre el fondo vino
 
 **No se desplegaron** Firestore Rules, índices ni Cloud Functions al Firebase real. Tampoco se escribieron datos de prueba en producción ni se confirmó allí un login, una cita, horarios, servicios o empleados. Las credenciales se mantienen en la configuración protegida del entorno; no las pegues en el chat ni publiques claves de Admin SDK. El bundle Android de Expo es solo una comprobación de empaquetado: **no es un APK instalable ni un build EAS**.
 
-Los avisos de citas/servicios se guardan para cliente, empleado asignado y administración y el código incluye registro de avisos al teléfono desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar Rules/Functions manualmente; no se simuló una entrega.
+Los avisos de citas/servicios se guardan para cliente, empleado asignado y administración y el código incluye registro de avisos al teléfono desde `enviarPushExpo`. La entrega push real en segundo plano sigue pendiente de asociar un proyecto EAS, configurar credenciales nativas Android/iOS, compilar la aplicación y desplegar la configuración que corresponda a las fases futuras; no se simuló una entrega.
 
 ## Roles y perfiles
 
@@ -69,13 +69,13 @@ Mientras falte cualquiera de estos requisitos, la interfaz identifica el estado 
 
 ### Solicitud y aprobación de empleado
 
-1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos de la cuenta. El servidor guarda en una sola operación el perfil de acceso base y la solicitud en `empleados/{uid}`. Si la operación falla, no queda un perfil cliente nuevo sin su solicitud; si la cuenta de acceso ya existía de un intento anterior, puede reintentar con la misma cuenta. El rol de acceso no obtiene permisos de empleado hasta que administración acepte.
-2. **Clientes y equipo** ofrece las pestañas **Clientes** y **Empleados**. En **Empleados** se muestran por separado las solicitudes pendientes y los empleados aceptados. Administración solo puede **Aceptar** o **Rechazar** solicitudes; ya no registra empleados ni asigna códigos manualmente.
-3. Las funciones verifican el rol administrativo y la solicitud. Si se acepta, se asigna el único negocio activo; si no existe, se crea **EUFORIA Beauty Studio** activo. Si hay varios negocios activos, la aceptación se detiene para evitar asignar al negocio equivocado. El rol empleado y la membresía del negocio se guardan únicamente después de aceptar.
-4. Un rechazo conserva la cuenta y los perfiles con rol cliente. La solicitud queda marcada como rechazada y no permite abrir agenda ni administrar disponibilidad.
+1. Desde el engranaje de la pantalla de acceso, la persona elige **Empleado → Registrarse como empleado** y completa los datos. Authentication crea la cuenta de acceso y la app guarda en un solo lote Firestore `users/{uid}`, `usuarios/{uid}` y `empleados/{uid}`. Los perfiles base y la solicitud comienzan con `role/rol: "cliente"`; la solicitud incluye `estadoSolicitud: "pendiente"`. Si el lote falla después de crear la cuenta de acceso, se puede iniciar otra vez como empleado con el mismo correo y contraseña; la app reutiliza esa cuenta, vuelve a enviar la solicitud y no reemplaza perfiles existentes.
+2. **Clientes y equipo** ofrece las pestañas **Clientes** y **Empleados**. En **Empleados** se muestran por separado las solicitudes pendientes y los empleados aceptados. Administración solo puede **Aceptar** o **Rechazar** solicitudes; ya no registra empleados ni asigna códigos manualmente. Ninguna persona con un documento en `empleados/{uid}` aparece en **Clientes**, cualquiera que sea el estado de solicitud.
+3. Firestore Rules comprueban el rol de administración y limitan las escrituras. **Aceptar** guarda en una operación atómica los perfiles, la solicitud y la membresía `negocios/{negocioId}/empleados/{uid}` con rol empleado, negocio, aprobación, empleado activo y disponibilidad inicial apagada; también agrega un aviso dentro de la app. Si se acepta y aún no hay negocio activo, se crea/reutiliza **EUFORIA Beauty Studio** con un ID estable. Si hay más de un negocio activo, la aceptación se detiene para evitar asignar al negocio equivocado. Este flujo ya no usa Cloud Functions, pero necesita una versión nueva de la app y publicar las Rules actualizadas.
+4. **Rechazar** cambia de manera atómica la solicitud pendiente a `rechazada` y agrega un aviso. La persona conserva los perfiles base como cliente, no obtiene permisos de empleado y no aparece en la lista de clientes.
 5. El empleado aceptado entra por **Empleado → Mi agenda → Editar mi disponibilidad semanal**, habilita los días, guarda su horario y activa **Disponible para citas**. Los valores iniciales 08:00–17:00 son una sugerencia del formulario y no se escriben hasta guardar.
 
-Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. En la app actual, inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña; si la cuenta sigue con perfil cliente y no tiene solicitud, la app la envía de nuevo. También puedes volver al registro de empleado con el mismo correo: la app verifica la contraseña de la cuenta existente y reintenta sin sobrescribir el perfil. La solicitud pendiente se devuelve como existente para no duplicarla. Si no puede enviar la solicitud, administración debe confirmar que las funciones actualizadas estén desplegadas; el documento de `empleados/{uid}` se crea al completar la solicitud y contiene `estadoSolicitud: "pendiente"`. Es normal que `users/{uid}` y `usuarios/{uid}` conserven `role: "cliente"` mientras la solicitud está pendiente: esos documentos son el acceso base y no son la solicitud. Las solicitudes rechazadas permanecen en `empleados/{uid}` para que esa persona no aparezca como cliente.
+Si el primer intento creó la cuenta pero no completó la solicitud, **no vuelvas a crear otra cuenta ni cambies el perfil a empleado a mano**. Inicia sesión desde el engranaje como **Empleado** con ese mismo correo y contraseña, o vuelve al registro de empleado con el mismo correo. La solicitud pendiente se devuelve como existente para no duplicarla. Es normal que `users/{uid}` y `usuarios/{uid}` conserven `role: "cliente"` mientras la solicitud está pendiente: esos documentos son el acceso base; `empleados/{uid}` contiene la solicitud. Las solicitudes rechazadas permanecen en esa colección para que esa persona no aparezca como cliente.
 
 ### Crear cuentas de clientes con contraseña provisional
 
@@ -140,34 +140,17 @@ El catálogo se mantiene desde **Resumen → Servicios y tiempos estimados**. Ej
 
 La escritura directa de citas, decisiones de solicitudes de empleado, disponibilidad y estados del historial está bloqueada por las reglas; se hace mediante funciones autorizadas. Las consultas de agenda respetan cliente/empleado/administración. `firestore.indexes.json` incluye índices de citas, avisos, cumpleaños y sincronización de servicios.
 
-## Desplegar Firebase manualmente
+## Fase 1: preparación para el plan gratuito
 
-No se ejecutó ningún despliegue. Después de revisar Rules, índices y Functions, una persona autorizada puede ejecutar desde la raíz del repositorio. El ID de proyecto incluido en cada comando evita depender de un alias local:
+Esta versión guarda el registro, la aprobación y el rechazo de empleados directamente desde la app con las nuevas reglas de Firestore. No hay que desplegar funciones para esos tres pasos. Después de revisar los cambios, una persona autorizada puede publicar **solo las reglas** en Firebase:
 
 ```bash
-# 1. Construir las funciones localmente antes de subirlas
-cd functions
-pnpm install --frozen-lockfile
-pnpm run build
-cd ..
-
-# 2. Publicar las reglas de seguridad
 firebase deploy --project euforia-e76a6 --only firestore:rules
-
-# 3. Publicar los índices compuestos, incluido citas (clienteId ASC, inicio ASC)
-firebase deploy --project euforia-e76a6 --only firestore:indexes
-
-# 4. Publicar las funciones, incluidos los flujos de empleado, recordatorios y avisos
-firebase deploy --project euforia-e76a6 --only functions
-
-# Para activar el registro, la aprobación y el rechazo de empleados
-firebase deploy --project euforia-e76a6 --only functions:solicitarPerfilEmpleado,functions:aprobarSolicitudEmpleado,functions:rechazarSolicitudEmpleado
-
-# Si además falta publicar las funciones de cuentas provisionales
-firebase deploy --project euforia-e76a6 --only functions:crearCuentaCliente,functions:cambiarContrasenaProvisional
 ```
 
-Esta mejora no añade índices ni requiere cambiar Rules: las reglas existentes ya permiten que administración lea `empleados` y bloquean al cliente cambiar los campos que solo escribe el servidor. Para corregir el registro fallido anterior y habilitar las cuentas provisionales, despliega las tres funciones indicadas o todas las Functions. Estos comandos modifican recursos reales. La tarea no los ejecutó ni escribió datos en producción. La función programada puede requerir Cloud Scheduler, plan Blaze y facturación habilitada; no se necesita pegar claves de Admin SDK en la aplicación.
+O, desde Firebase Console: **Firestore Database → Reglas**, pegar el contenido actualizado de `firestore.rules` y elegir **Publicar**. Después hay que instalar/abrir la versión actualizada de EUFORIA. Esta fase no cambia `firestore.indexes.json`, así que no requiere publicar índices.
+
+No se ejecutó ningún despliegue ni se escribieron datos reales. No despliegues `solicitarPerfilEmpleado`, `aprobarSolicitudEmpleado` ni `rechazarSolicitudEmpleado` para la nueva versión: ya no forman parte del flujo activo de la app. Las operaciones de citas, alta de clientes con contraseña provisional, recordatorios y avisos automáticos aún dependen de las funciones existentes y se migrarán en las fases 2 y 3. La carpeta `functions/` y los endpoints ya publicados no se retiran hasta completar esas fases; quitar una exportación del código no borra por sí solo una función que ya esté desplegada. No se requiere pegar claves privadas de Admin SDK en la aplicación.
 
 ## Desarrollo y verificaciones
 
@@ -184,11 +167,13 @@ pnpm install
 pnpm run build
 ```
 
-Las verificaciones locales de esta entrega: TypeScript y lint sin errores, 49 pruebas unitarias pasaron (1 prueba previa se omite), Functions compiló y Expo exportó el bundle Android HBC. La auditoría estática confirmó que perfiles y solicitud pendiente se guardan en la misma transacción. El bundle no genera APK/EAS ni prueba una llamada real a Firebase desde un teléfono. Node informó que el runtime local es 22 mientras Functions fija Node 20; no impidió la compilación. No se hicieron despliegues ni escritura de datos reales.
+Verificaciones locales de la Fase 1: `pnpm check` pasó; `pnpm lint` pasó (solo avisa de la configuración ESM de ESLint); `pnpm test` pasó con 52 pruebas aprobadas y 9 omitidas; `pnpm test:rules` pasó con 8 de 8 pruebas en Firestore Emulator con proyecto demo; las funciones restantes compilaron, con aviso de que el entorno usa Node 22 y la carpeta de funciones declara Node 20; Expo exportó para Android y Web. Una auditoría independiente no encontró defectos reproducibles en el alcance. La exportación no genera APK/EAS ni prueba una llamada real desde un teléfono. No se hicieron despliegues ni escrituras de datos reales.
 
 ## Pendientes fuera de esta fase
 
-- Desplegar manualmente Rules, índices y Functions a Firebase real y verificar la solicitud/aceptación/rechazo con cuentas reales; no se ha desplegado ningún recurso desde esta tarea.
+- Publicar manualmente solo `firestore.rules` y comprobar el registro, aceptación y rechazo con cuentas reales; no se ha desplegado ningún recurso desde esta tarea.
+- Fase 2: trasladar disponibilidad, reservas, decisiones de citas e inicio/finalización de servicios desde Cloud Functions a Firestore Rules y transacciones cliente.
+- Fase 3: trasladar las cuentas cliente con contraseña provisional a una segunda instancia de Auth, los avisos dentro de la app y la preparación de WhatsApp a cálculo manual; retirar push automático y las Functions restantes. La app aún no se ha migrado por completo a Spark.
 - Asociar proyecto EAS, configurar FCM V1/APNs, credenciales nativas y build firmado para que push llegue al teléfono con la app cerrada.
 - Crear negocio/horarios/servicios reales; los empleados deben enviar solicitud y administración aceptarla para activar su rol.
 - Gestión de feriados, descansos múltiples, disponibilidad variable por fecha y restauración de copias.

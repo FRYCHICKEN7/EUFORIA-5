@@ -17,6 +17,14 @@ service cloud.firestore {
       return /databases/$(database)/documents/empleados/$(uid);
     }
 
+    function businessPath(businessId) {
+      return /databases/$(database)/documents/negocios/$(businessId);
+    }
+
+    function businessEmployeePath(businessId, uid) {
+      return /databases/$(database)/documents/negocios/$(businessId)/empleados/$(uid);
+    }
+
     function normalizedRole(value) {
       return value is string
         ? (value.lower() in ['admin', 'administrador'] ? 'admin'
@@ -52,8 +60,25 @@ service cloud.firestore {
         : (appRole != '' ? appRole : legacyRole != '' ? legacyRole : staffRole);
     }
 
+    function profileIsAdmin(data) {
+      let role = data.get('role', '');
+      let rol = data.get('rol', '');
+      return (role == '' || role in ['admin', 'administrador'])
+        && (rol == '' || rol in ['admin', 'administrador'])
+        && (role in ['admin', 'administrador'] || rol in ['admin', 'administrador']);
+    }
+
+    function adminProfilesMatch(uid) {
+      let hasUser = exists(legacyUserPath(uid));
+      let hasUsuario = exists(userPath(uid));
+      return (hasUser || hasUsuario)
+        && (!hasUser || profileIsAdmin(get(legacyUserPath(uid)).data))
+        && (!hasUsuario || profileIsAdmin(get(userPath(uid)).data))
+        && !exists(employeeProfilePath(uid));
+    }
+
     function isAdmin() {
-      return signedIn() && profileRole(request.auth.uid) == 'admin';
+      return signedIn() && adminProfilesMatch(request.auth.uid);
     }
 
     function isEmployee() {
@@ -90,10 +115,11 @@ service cloud.firestore {
           'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
           'aceptaRecordatoriosWhatsApp'
         ])
-        && data.keys().hasAll(['id', 'email', 'createdAt', 'phone'])
+        && data.keys().hasAll(['id', 'email', 'role', 'rol', 'createdAt', 'phone'])
         && data.get('id', '') == uid
         && data.get('email', '') == request.auth.token.email
-        && profileRoleFromData(data) == 'cliente'
+        && data.get('role', '') == 'cliente'
+        && data.get('rol', '') == 'cliente'
         && data.get('name', '') is string && data.get('name', '').size() <= 100
         && data.get('displayName', '') is string && data.get('displayName', '').size() <= 100
         && validPhone(data)
@@ -104,27 +130,324 @@ service cloud.firestore {
         && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048;
     }
 
-    match /usuarios/{uid} {
-      allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
-      allow list: if isAdmin();
-      allow create: if signedIn()
-        && request.auth.uid == uid
-        && validCustomerProfile(request.resource.data, uid)
-        && request.resource.data.createdAt == request.time;
-      allow update: if signedIn()
-        && request.auth.uid == uid
+    function validEmployeeRequest(data, uid) {
+      return data.keys().hasOnly([
+          'id', 'email', 'role', 'rol', 'name', 'displayName', 'phone',
+          'profileImage', 'photoURL', 'aceptaRecordatoriosWhatsApp',
+          'birthdayDay', 'birthdayMonth', 'estadoSolicitud',
+          'solicitadaAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasAll([
+          'id', 'email', 'role', 'rol', 'name', 'displayName', 'phone',
+          'estadoSolicitud', 'solicitadaAt', 'createdAt', 'updatedAt'
+        ])
+        && data.get('id', '') == uid
+        && data.get('email', '') == request.auth.token.email
+        && data.get('role', '') == 'cliente'
+        && data.get('rol', '') == 'cliente'
+        && data.get('estadoSolicitud', '') == 'pendiente'
+        && data.get('name', '') is string && data.get('name', '').size() >= 2 && data.get('name', '').size() <= 100
+        && data.get('displayName', '') is string && data.get('displayName', '').size() >= 2 && data.get('displayName', '').size() <= 100
+        && validPhone(data)
+        && validBirthday(data)
+        && data.get('profileImage', '') is string && data.get('profileImage', '').size() <= 2048
+        && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048
+        && (!data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || data.get('aceptaRecordatoriosWhatsApp', true) is bool)
+        && data.get('solicitadaAt', null) == request.time
+        && data.get('createdAt', null) is timestamp
+        && data.get('updatedAt', null) == request.time;
+    }
+
+    function baseProfilesAfterAreClients(uid) {
+      return existsAfter(userPath(uid))
+        && existsAfter(legacyUserPath(uid))
+        && profileRoleFromData(getAfter(userPath(uid)).data) == 'cliente'
+        && profileRoleFromData(getAfter(legacyUserPath(uid)).data) == 'cliente'
+        && getAfter(userPath(uid)).data.get('id', '') == uid
+        && getAfter(legacyUserPath(uid)).data.get('id', '') == uid
+        && getAfter(userPath(uid)).data.get('email', '') == request.auth.token.email
+        && getAfter(legacyUserPath(uid)).data.get('email', '') == request.auth.token.email
+        && validPhone(getAfter(userPath(uid)).data)
+        && validPhone(getAfter(legacyUserPath(uid)).data);
+    }
+
+    function pendingEmployeeRequestBefore(uid) {
+      return exists(employeeProfilePath(uid))
+        && get(employeeProfilePath(uid)).data.get('estadoSolicitud', '') == 'pendiente'
+        && get(employeeProfilePath(uid)).data.get('role', '') == 'cliente'
+        && get(employeeProfilePath(uid)).data.get('rol', '') == 'cliente';
+    }
+
+    function approvedEmployeeStateAfter(uid, businessId) {
+      let employeePath = employeeProfilePath(uid);
+      let employee = getAfter(employeePath).data;
+      let business = getAfter(businessPath(businessId)).data;
+      return existsAfter(employeePath)
+        && businessId is string && businessId.size() > 0
+        && employee.get('id', '') == uid
+        && employee.get('role', '') == 'empleado'
+        && employee.get('rol', '') == 'empleado'
+        && employee.get('estadoSolicitud', '') == 'aprobada'
+        && employee.get('negocioId', '') == businessId
+        && employee.get('aprobadoPorUid', '') == request.auth.uid
+        && employee.get('aprobadaAt', null) == request.time
+        && employee.get('activo', false) == true
+        && employee.get('publica', false) == true
+        && employee.get('disponible', true) == false
+        && existsAfter(businessPath(businessId))
+        && business.get('activo', false) == true;
+    }
+
+    function validEmployeeMembership(data, uid, businessId) {
+      let employee = getAfter(employeeProfilePath(uid)).data;
+      return data.keys().hasOnly([
+          'id', 'uid', 'usuarioId', 'email', 'name', 'nombre', 'displayName', 'phone',
+          'profileImage', 'photoURL', 'role', 'rol', 'Empleado', 'negocioId',
+          'estadoSolicitud', 'aprobadaAt', 'aprobadoPorUid', 'activo', 'publica',
+          'disponible', 'createdAt', 'birthdayDay', 'birthdayMonth'
+        ])
+        && data.keys().hasAll([
+          'id', 'uid', 'usuarioId', 'email', 'name', 'nombre', 'displayName', 'phone',
+          'profileImage', 'photoURL', 'role', 'rol', 'Empleado', 'negocioId',
+          'estadoSolicitud', 'aprobadaAt', 'aprobadoPorUid', 'activo', 'publica',
+          'disponible', 'createdAt'
+        ])
+        && data.get('id', '') == uid
+        && data.get('uid', '') == uid
+        && data.get('usuarioId', '') == uid
+        && data.get('email', '') == employee.get('email', '')
+        && data.get('name', '') == employee.get('name', '')
+        && data.get('displayName', '') == employee.get('displayName', '')
+        && data.get('phone', '') == employee.get('phone', '')
+        && data.get('role', '') == 'empleado'
+        && data.get('rol', '') == 'empleado'
+        && data.get('Empleado', '') == employee.get('Empleado', '')
+        && data.get('negocioId', '') == businessId
+        && data.get('estadoSolicitud', '') == 'aprobada'
+        && data.get('aprobadaAt', null) == request.time
+        && data.get('aprobadoPorUid', '') == request.auth.uid
+        && data.get('activo', false) == true
+        && data.get('publica', false) == true
+        && data.get('disponible', true) == false
+        && data.get('createdAt', null) == request.time
+        && data.get('birthdayDay', 0) == employee.get('birthdayDay', 0)
+        && data.get('birthdayMonth', 0) == employee.get('birthdayMonth', 0);
+    }
+
+    function approvedEmployeeAndMembershipAfter(uid, businessId) {
+      let membershipPath = businessEmployeePath(businessId, uid);
+      let membership = getAfter(membershipPath).data;
+      return approvedEmployeeStateAfter(uid, businessId)
+        && existsAfter(membershipPath)
+        && membership.get('id', '') == uid
+        && membership.get('uid', '') == uid
+        && membership.get('usuarioId', '') == uid
+        && membership.get('negocioId', '') == businessId
+        && membership.get('role', '') == 'empleado'
+        && membership.get('rol', '') == 'empleado'
+        && membership.get('activo', false) == true
+        && membership.get('publica', false) == true
+        && membership.get('disponible', true) == false;
+    }
+
+    function approvedEmployeeProfilesAfter(uid, businessId) {
+      let appProfile = getAfter(legacyUserPath(uid)).data;
+      let legacyProfile = getAfter(userPath(uid)).data;
+      return existsAfter(legacyUserPath(uid))
+        && existsAfter(userPath(uid))
+        && appProfile.get('role', '') == 'empleado'
+        && appProfile.get('rol', '') == 'empleado'
+        && legacyProfile.get('role', '') == 'empleado'
+        && legacyProfile.get('rol', '') == 'empleado'
+        && appProfile.get('negocioId', '') == businessId
+        && legacyProfile.get('negocioId', '') == businessId
+        && appProfile.get('id', '') == uid
+        && legacyProfile.get('id', '') == uid;
+    }
+
+    function validAdminEmployeeProfileUpdate(uid) {
+      return isAdmin()
+        && profileRoleFromData(resource.data) == 'cliente'
+        && request.resource.data.get('role', '') == 'empleado'
+        && request.resource.data.get('rol', '') == 'empleado'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
-          'aceptaRecordatoriosWhatsApp'
+          'role', 'rol', 'negocioId', 'updatedAt', 'name', 'displayName', 'phone',
+          'profileImage', 'photoURL', 'birthdayDay', 'birthdayMonth'
+        ])
+        && request.resource.data.get('id', '') == resource.data.get('id', '')
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('negocioId', '') is string
+        && request.resource.data.get('updatedAt', null) == request.time
+        && validPhone(request.resource.data)
+        && validBirthday(request.resource.data)
+        && approvedEmployeeStateAfter(uid, request.resource.data.get('negocioId', ''));
+    }
+
+    function validAdminEmployeeProfileCreate(uid) {
+      let data = request.resource.data;
+      let employee = getAfter(employeeProfilePath(uid)).data;
+      let businessId = data.get('negocioId', '');
+      return isAdmin()
+        && data.keys().hasOnly([
+          'id', 'email', 'role', 'rol', 'createdAt', 'updatedAt', 'name', 'displayName',
+          'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp', 'negocioId'
+        ])
+        && data.keys().hasAll([
+          'id', 'email', 'role', 'rol', 'createdAt', 'updatedAt', 'name', 'displayName',
+          'phone', 'profileImage', 'photoURL', 'negocioId'
+        ])
+        && data.get('id', '') == uid
+        && data.get('email', '') is string && data.get('email', '').size() <= 254
+        && data.get('email', '') == employee.get('email', '')
+        && data.get('role', '') == 'empleado' && data.get('rol', '') == 'empleado'
+        && data.get('name', '') is string && data.get('name', '').size() >= 2 && data.get('name', '').size() <= 100
+        && data.get('name', '') == employee.get('name', '')
+        && data.get('displayName', '') is string && data.get('displayName', '').size() >= 2 && data.get('displayName', '').size() <= 100
+        && data.get('displayName', '') == employee.get('displayName', '')
+        && data.get('phone', '') == employee.get('phone', '')
+        && validPhone(data)
+        && data.get('profileImage', '') is string && data.get('profileImage', '').size() <= 2048
+        && data.get('profileImage', '') == employee.get('profileImage', '')
+        && data.get('photoURL', '') is string && data.get('photoURL', '').size() <= 2048
+        && data.get('photoURL', '') == employee.get('photoURL', '')
+        && data.get('birthdayDay', 0) == employee.get('birthdayDay', 0)
+        && data.get('birthdayMonth', 0) == employee.get('birthdayMonth', 0)
+        && validBirthday(data)
+        && data.get('createdAt', null) == request.time
+        && data.get('updatedAt', null) == request.time
+        && employee.get('negocioId', '') == businessId
+        && approvedEmployeeStateAfter(uid, businessId)
+        && (!data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+          || data.get('aceptaRecordatoriosWhatsApp', true) is bool);
+    }
+
+    function validAdminEmployeeApproval(uid) {
+      return isAdmin()
+        && resource.data.get('id', '') == uid
+        && resource.data.get('role', '') == 'cliente'
+        && resource.data.get('rol', '') == 'cliente'
+        && resource.data.get('estadoSolicitud', '') == 'pendiente'
+        && request.resource.data.get('id', '') == uid
+        && request.resource.data.get('role', '') == 'empleado'
+        && request.resource.data.get('rol', '') == 'empleado'
+        && request.resource.data.get('estadoSolicitud', '') == 'aprobada'
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && request.resource.data.get('name', '') == resource.data.get('name', '')
+        && request.resource.data.get('displayName', '') == resource.data.get('displayName', '')
+        && request.resource.data.get('phone', '') == resource.data.get('phone', '')
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('solicitadaAt', null) == resource.data.get('solicitadaAt', null)
+        && request.resource.data.get('negocioId', '') is string
+        && request.resource.data.get('Empleado', '') is string
+        && request.resource.data.get('Empleado', '').size() >= 4
+        && request.resource.data.get('Empleado', '').size() <= 64
+        && request.resource.data.get('aprobadoPorUid', '') == request.auth.uid
+        && request.resource.data.get('aprobadaAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.get('activo', false) == true
+        && request.resource.data.get('publica', false) == true
+        && request.resource.data.get('disponible', true) == false
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'role', 'rol', 'estadoSolicitud', 'Empleado', 'negocioId', 'aprobadaAt',
+          'aprobadoPorUid', 'activo', 'publica', 'disponible', 'updatedAt',
+          'birthdayDay', 'birthdayMonth'
         ])
         && validPhone(request.resource.data)
         && validBirthday(request.resource.data)
-        && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
-          || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
-        && request.resource.data.id == resource.data.id
-        && request.resource.data.email == resource.data.email
-        && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
-        && request.resource.data.createdAt == resource.data.createdAt;
+        && approvedEmployeeAndMembershipAfter(uid, request.resource.data.get('negocioId', ''))
+        && approvedEmployeeProfilesAfter(uid, request.resource.data.get('negocioId', ''));
+    }
+
+    function validAdminEmployeeRejection(uid) {
+      return isAdmin()
+        && resource.data.get('id', '') == uid
+        && resource.data.get('role', '') == 'cliente'
+        && resource.data.get('rol', '') == 'cliente'
+        && resource.data.get('estadoSolicitud', '') == 'pendiente'
+        && request.resource.data.get('id', '') == uid
+        && request.resource.data.get('role', '') == 'cliente'
+        && request.resource.data.get('rol', '') == 'cliente'
+        && request.resource.data.get('estadoSolicitud', '') == 'rechazada'
+        && request.resource.data.get('email', '') == resource.data.get('email', '')
+        && request.resource.data.get('name', '') == resource.data.get('name', '')
+        && request.resource.data.get('phone', '') == resource.data.get('phone', '')
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.get('rechazadaPorUid', '') == request.auth.uid
+        && request.resource.data.get('rechazadaAt', null) == request.time
+        && request.resource.data.get('updatedAt', null) == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'estadoSolicitud', 'rechazadaAt', 'rechazadaPorUid', 'updatedAt'
+        ]);
+    }
+
+    function validOwnerEmployeeRequestRetry(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && resource.data.get('id', '') == uid
+        && resource.data.get('role', '') == 'cliente'
+        && resource.data.get('rol', '') == 'cliente'
+        && resource.data.get('estadoSolicitud', '') == 'rechazada'
+        && validEmployeeRequest(request.resource.data, uid)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'email', 'name', 'displayName', 'phone', 'profileImage', 'photoURL',
+          'aceptaRecordatoriosWhatsApp', 'birthdayDay', 'birthdayMonth',
+          'estadoSolicitud', 'solicitadaAt', 'updatedAt', 'rechazadaAt', 'rechazadaPorUid'
+        ])
+        && baseProfilesAfterAreClients(uid);
+    }
+
+    function validEmployeeDecisionNotification(data) {
+      let uid = data.get('destinatarioId', '');
+      let employee = getAfter(employeeProfilePath(uid)).data;
+      return isAdmin()
+        && data.keys().hasOnly(['destinatarioId', 'solicitanteUid', 'tipo', 'titulo', 'cuerpo', 'createdAt', 'leida'])
+        && data.keys().hasAll(['destinatarioId', 'solicitanteUid', 'tipo', 'titulo', 'cuerpo', 'createdAt', 'leida'])
+        && uid is string && uid.size() > 0
+        && data.get('solicitanteUid', '') == uid
+        && data.get('titulo', '') is string && data.get('titulo', '').size() <= 120
+        && data.get('cuerpo', '') is string && data.get('cuerpo', '').size() <= 500
+        && data.get('createdAt', null) == request.time
+        && data.get('leida', true) == false
+        && exists(employeeProfilePath(uid))
+        && get(employeeProfilePath(uid)).data.get('estadoSolicitud', '') == 'pendiente'
+        && ((data.get('tipo', '') == 'solicitud_empleado_aceptada'
+            && employee.get('estadoSolicitud', '') == 'aprobada'
+            && employee.get('role', '') == 'empleado'
+            && employee.get('aprobadoPorUid', '') == request.auth.uid
+            && approvedEmployeeStateAfter(uid, employee.get('negocioId', '')))
+          || (data.get('tipo', '') == 'solicitud_empleado_rechazada'
+            && employee.get('estadoSolicitud', '') == 'rechazada'
+            && employee.get('role', '') == 'cliente'
+            && employee.get('rol', '') == 'cliente'
+            && employee.get('rechazadaPorUid', '') == request.auth.uid
+            && employee.get('rechazadaAt', null) == request.time));
+    }
+
+    match /usuarios/{uid} {
+      allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if signedIn() && (request.auth.uid == uid
+        ? (validCustomerProfile(request.resource.data, uid)
+          && request.resource.data.createdAt == request.time)
+        : validAdminEmployeeProfileCreate(uid));
+      allow update: if signedIn() && (request.auth.uid == uid
+        ? (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+            'aceptaRecordatoriosWhatsApp'
+          ])
+          && validPhone(request.resource.data)
+          && validBirthday(request.resource.data)
+          && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+            || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.email == resource.data.email
+          && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
+          && request.resource.data.createdAt == resource.data.createdAt)
+        : validAdminEmployeeProfileUpdate(uid));
       allow delete: if false;
 
       match /dispositivos/{deviceId} {
@@ -147,32 +470,40 @@ service cloud.firestore {
     match /users/{uid} {
       allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
       allow list: if isAdmin();
-      allow create: if signedIn()
-        && request.auth.uid == uid
-        && validCustomerProfile(request.resource.data, uid)
-        && request.resource.data.createdAt == request.time;
-      allow update: if signedIn()
-        && request.auth.uid == uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
-          'aceptaRecordatoriosWhatsApp'
-        ])
-        && validPhone(request.resource.data)
-        && validBirthday(request.resource.data)
-        && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
-          || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
-        && request.resource.data.id == resource.data.id
-        && request.resource.data.email == resource.data.email
-        && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
-        && request.resource.data.createdAt == resource.data.createdAt;
+      allow create: if signedIn() && (request.auth.uid == uid
+        ? (validCustomerProfile(request.resource.data, uid)
+          && request.resource.data.createdAt == request.time)
+        : validAdminEmployeeProfileCreate(uid));
+      allow update: if signedIn() && (request.auth.uid == uid
+        ? (request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name', 'displayName', 'phone', 'birthdayDay', 'birthdayMonth', 'profileImage', 'photoURL',
+            'aceptaRecordatoriosWhatsApp'
+          ])
+          && validPhone(request.resource.data)
+          && validBirthday(request.resource.data)
+          && (!request.resource.data.keys().hasAny(['aceptaRecordatoriosWhatsApp'])
+            || request.resource.data.get('aceptaRecordatoriosWhatsApp', true) is bool)
+          && request.resource.data.id == resource.data.id
+          && request.resource.data.email == resource.data.email
+          && profileRoleFromData(request.resource.data) == profileRoleFromData(resource.data)
+          && request.resource.data.createdAt == resource.data.createdAt)
+        : validAdminEmployeeProfileUpdate(uid));
       allow delete: if false;
     }
 
     match /empleados/{uid} {
       allow get: if (signedIn() && request.auth.uid == uid) || isAdmin();
       allow list: if isAdmin();
-      // Profile promotion and protected employee fields are written only by Admin SDK Functions.
-      allow create, update, delete: if false;
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && validEmployeeRequest(request.resource.data, uid)
+        && baseProfilesAfterAreClients(uid);
+      allow update: if signedIn() && (request.auth.uid == uid
+        ? validOwnerEmployeeRequestRetry(uid)
+        : (request.resource.data.get('estadoSolicitud', '') == 'aprobada'
+          ? validAdminEmployeeApproval(uid)
+          : validAdminEmployeeRejection(uid)));
+      allow delete: if false;
     }
 
     match /clientes/{clienteId} {
@@ -202,8 +533,11 @@ service cloud.firestore {
         allow get, list: if isAdmin()
           || (signedIn() && request.auth.uid == empleadoId)
           || (signedIn() && publicEmployee(resource.data));
-        // Employee membership, roles and published visibility are server-managed.
-        allow create, update, delete: if false;
+        allow create: if isAdmin()
+          && !exists(businessEmployeePath(negocioId, empleadoId))
+          && validEmployeeMembership(request.resource.data, empleadoId, negocioId)
+          && approvedEmployeeStateAfter(empleadoId, negocioId);
+        allow update, delete: if false;
 
         match /disponibilidad/{dia} {
           allow get, list: if isAdmin()
@@ -228,22 +562,21 @@ service cloud.firestore {
           || resource.data.get('clienteId', '') == request.auth.uid
           || (isEmployee() && (resource.data.get('empleadoUid', '') == request.auth.uid
             || resource.data.get('empleadoId', '') == request.auth.uid)));
-      // Reservations and all state transitions are performed by verified Cloud Functions.
       allow create, update, delete: if false;
     }
 
     match /notificaciones/{notifId} {
       allow get, list: if signedIn()
         && (resource.data.get('destinatarioId', '') == request.auth.uid || isAdmin());
+      allow create: if validEmployeeDecisionNotification(request.resource.data);
       allow update: if signedIn()
         && resource.data.get('destinatarioId', '') == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['leida'])
         && request.resource.data.leida is bool;
-      allow create, delete: if false;
+      allow delete: if false;
     }
 
     match /recordatoriosWhatsApp/{recordatorioId} {
-      // El historial solo es visible para administración; todas las transiciones usan Functions.
       allow get, list: if isAdmin();
       allow create, update, delete: if false;
     }

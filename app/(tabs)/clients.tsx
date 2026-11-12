@@ -214,17 +214,16 @@ function friendlyError(reason: unknown) {
 function employeeDecisionErrorMessage(reason: unknown) {
   const code = String((reason as { code?: unknown } | null)?.code ?? "").replace(/^functions\//, "");
   const serverMessage = String((reason as { message?: unknown } | null)?.message ?? "").toLowerCase();
-  if (code === "not-found" || code === "unimplemented") {
-    return "La aprobación automática aún no está activada. Actualiza las funciones del servidor y vuelve a intentarlo.";
-  }
+  if (code === "not-found") return "No encontramos la solicitud. Actualiza la pantalla y revisa de nuevo.";
   if (code === "unauthenticated") return "Tu sesión terminó. Vuelve a ingresar como administración e inténtalo de nuevo.";
   if (code === "permission-denied") return "Esta cuenta no tiene permiso para aprobar solicitudes.";
   if (code === "failed-precondition" && serverMessage.includes("más de un negocio activo")) return "Hay más de un negocio activo. Deja solo uno activo en Ajustes y vuelve a aceptar la solicitud.";
-  if (code === "failed-precondition" && serverMessage.includes("nombre y teléfono")) return "Completa el nombre y el teléfono de esta cuenta antes de aceptarla.";
+  if (code === "failed-precondition" && serverMessage.includes("negocio activo cambió")) return "El negocio activo cambió. Actualiza la pantalla y vuelve a intentarlo.";
+  if (code === "failed-precondition" && serverMessage.includes("nombre, correo y teléfono")) return "Completa el nombre, el correo y el teléfono de esta cuenta antes de aceptarla.";
   if (code === "failed-precondition") return "No se pudo aprobar porque la solicitud o los datos de la cuenta cambiaron. Actualiza la pantalla y revisa el perfil.";
   if (code === "already-exists") return "Esta persona ya tiene un perfil de empleado. Actualiza la pantalla.";
   if (code === "unavailable" || code === "deadline-exceeded") return "No pudimos conectar con el servidor. Revisa tu conexión e inténtalo de nuevo.";
-  return "No pudimos guardar la decisión. Verifica que las funciones estén actualizadas e inténtalo de nuevo.";
+  return "No pudimos guardar la decisión. Actualiza la pantalla e inténtalo de nuevo.";
 }
 
 const styles = StyleSheet.create({

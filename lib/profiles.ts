@@ -183,30 +183,13 @@ export function subscribePendingEmployeeRequests(
   }, error);
 }
 
-export type EmployeeApplicationProfile = {
-  name: string;
-  phone: string;
-  birthdayDay?: number;
-  birthdayMonth?: number;
-};
-
-export async function solicitarPerfilEmpleado(input?: EmployeeApplicationProfile) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<EmployeeApplicationProfile | Record<string, never>, { ok: true; estado?: "pendiente" }>(functions, "solicitarPerfilEmpleado");
-  return (await callable(input ?? {})).data;
-}
-
-export async function aprobarSolicitudEmpleado(input: { uid: string }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<typeof input, { ok: true }>(functions, "aprobarSolicitudEmpleado");
-  return (await callable(input)).data;
-}
-
-export async function rechazarSolicitudEmpleado(input: { uid: string }) {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<typeof input, { ok: true }>(functions, "rechazarSolicitudEmpleado");
-  return (await callable(input)).data;
-}
+export {
+  aprobarSolicitudEmpleado,
+  rechazarSolicitudEmpleado,
+  solicitarPerfilEmpleado,
+  createInitialBusiness,
+} from "./employee-requests";
+export type { EmployeeApplicationProfile } from "./employee-requests";
 
 export type CreateAdminClientInput = {
   name: string;
@@ -269,13 +252,6 @@ export function subscribeNotifications(uid: string, next: (items: AppNotificatio
 export async function markNotificationRead(id: string) {
   if (!(await ensureFirebaseConfigured()) || !db) throw new Error("El servicio no está disponible.");
   await updateDoc(doc(db, "notificaciones", id), { leida: true });
-}
-
-export async function createInitialBusiness() {
-  if (!(await ensureFirebaseConfigured()) || !functions) throw new Error("El servicio no está disponible.");
-  const callable = httpsCallable<Record<string, never>, { ok: true; created: boolean; businessId: string; nombre: string }>(functions, "prepararNegocioInicial");
-  const result = await callable({});
-  return result.data;
 }
 
 export type WeeklyAvailabilityDay = { dia: number; activo: boolean; inicio: string; fin: string };
