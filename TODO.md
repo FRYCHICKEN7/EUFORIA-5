@@ -68,5 +68,5 @@
 - [ ] Si quedan funciones anteriores desplegadas, listarlas primero con `firebase functions:list --project euforia-e76a6` y borrar manualmente solo las confirmadas que el negocio ya no utilice. El código local archivado no elimina endpoints ya publicados.
 - [ ] Probar con cuentas reales que administración prepare la agenda existente, que cliente reserve y que el empleado/administración vea el aviso al abrir la app. La entrega push con la app cerrada no forma parte de esta arquitectura Spark.
 - [ ] Probar en un teléfono físico el guardado local de copias y la apertura manual de WhatsApp; ninguna de esas acciones se verificó en dispositivo real.
-- [ ] Sincronizar los cambios revisados con el remoto público ya solicitado [FRYCHICKEN7/EUFORIA-5](https://github.com/FRYCHICKEN7/EUFORIA-5); mantener el remoto canónico de Manus y no crear el repositorio alternativo `EUFORIA-6`.
+- [x] Sincronizar el código revisado en `main` del remoto canónico Manus y el espejo público ya solicitado [FRYCHICKEN7/EUFORIA-5](https://github.com/FRYCHICKEN7/EUFORIA-5), commit `ae0996993e6d0c69f4aafb9f733e2b62534dc30a`; conservar la historia y no crear el repositorio alternativo `EUFORIA-6`.
 - [ ] La restauración desde copia, feriados, descansos múltiples y disponibilidad variable por fecha quedan fuera de esta entrega.

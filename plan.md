@@ -80,7 +80,7 @@ No hay una prueba de Auth de producción ni se ejecutó el flujo en un teléfono
 
 ## Validación, cambios publicados y entrega
 
-El repositorio canónico del proyecto sigue siendo Manus. La copia pública solicitada por la persona ya existe como [`FRYCHICKEN7/EUFORIA-5`](https://github.com/FRYCHICKEN7/EUFORIA-5), con rama principal `main`; se sincroniza allí sin cambiar el remoto canónico y tras revisar el contenido por secretos. No se crea otro repositorio `EUFORIA-6`. README/TODO conservan los pasos manuales, límites de seguridad y pruebas realmente ejecutadas.
+El código verificado quedó en el commit `ae0996993e6d0c69f4aafb9f733e2b62534dc30a`, sincronizado con la rama `main` del remoto canónico Manus y del espejo público solicitado [`FRYCHICKEN7/EUFORIA-5`](https://github.com/FRYCHICKEN7/EUFORIA-5). La historia se conserva y no se crea otro repositorio `EUFORIA-6`. La publicación automática está desactivada; guardar el código no publica la app ni despliega Firebase. README/TODO conservan los pasos manuales, límites de seguridad y pruebas realmente ejecutadas.
 
 No se despliegan Rules ni se publican datos en producción desde esta tarea. Publicar las Rules requiere acción manual del titular: **Firebase Console → Firestore Database → Reglas → pegar el archivo final → Publicar**.
 
